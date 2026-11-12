@@ -31,7 +31,16 @@ export function officeSvg(A, s = {}) {
   const shadowE = (x, y, rx = 6) => `<ellipse cx="${x}" cy="${y}" rx="${rx}" ry="1.6" fill="#000" opacity=".28"/>`;
   // ---------- helpers: actors, walkers, effects ----------
   let pathCss = '';
-  const hp = (f, bad) => G(rect(-0.5, -0.5, 17, 4, '#1B1F2A') + rect(0, 0, 16, 3, bad ? '#4A1414' : '#1E3A2A') + rect(0, 0, Math.max(1, Math.round(16 * Math.max(0, Math.min(1, f)))), 3, bad ? '#FF5252' : f > .66 ? '#4ADE80' : f > .33 ? '#FACC15' : '#FB923C', bad ? 'alarm' : '') + rect(0, 0, 16, 1, '#FFFFFF', '', .25), 'transform="translate(0 -7)"');
+  let hpN = 0;
+  // HP-style bar: starts at the real progress and grows smoothly toward where the step will be at the next refresh
+  const hp = (f, bad) => {
+    const f0 = Math.max(0, Math.min(1, f)), f1 = Math.max(f0, Math.min(0.99, f0 + (st0.rate || 0) * 32)), id = ++hpN;
+    pathCss += `@keyframes hpg${id}{from{transform:scaleX(${f0})}to{transform:scaleX(${f1})}}`;
+    const col = bad ? '#FF5252' : f0 > .66 ? '#4ADE80' : f0 > .33 ? '#FACC15' : '#FB923C';
+    return G(rect(-0.5, -0.5, 17, 4, '#1B1F2A') + rect(0, 0, 16, 3, bad ? '#4A1414' : '#1E3A2A')
+      + `<rect x="0" y="0" width="16" height="3" fill="${col}" style="transform-origin:0 0;transform:scaleX(${f0});animation:hpg${id} 32s linear forwards"${bad ? ' class="alarm"' : ''}/>`
+      + rect(0, 0, 16, 1, '#FFFFFF', '', .25), 'transform="translate(0 -7)"');
+  };
   const steamHead = G([0, 1, 2].map(i => rect(4 + i * 4, -2, 2, 2, '#FFFFFF', `rise r${i}`, 0)).join(''));
   const speed = G(rect(-5, 9, 3, 1, '#FFFFFF', 'tap t0', 0) + rect(-6, 13, 4, 1, '#FFFFFF', 'tap t1', 0) + rect(18, 10, 3, 1, '#FFFFFF', 'tap t2', 0) + rect(18, 14, 4, 1, '#FFFFFF', 'tap t0', 0));
   const sweatFx = G(rect(14, 4, 1, 2, '#81D4FA') + rect(14, 6, 1, 1, '#B3E5FC') + rect(1, 5, 1, 2, '#81D4FA'), 'class="sweat"');
@@ -90,15 +99,25 @@ export function officeSvg(A, s = {}) {
     return P;
   };
   const CHAR = { fetch: 'courier', research: 'sonnet', plan: 'opus', build: 'tech', check: 'qa', deliver: 'courier' };
+  // hand-off: the previous step's employee walks the folder over; returns the svg and the arrival time (s)
   const handoff = (from, to) => {
-    if (!STA[from] || !STA[to] || CHAR[from] === CHAR[to]) return '';
+    if (!STA[from] || !STA[to] || CHAR[from] === CHAR[to]) return null;
     const go = route(from, to), back = go.slice().reverse();
     const all = [...go, go[go.length - 1], ...back];
-    const d = []; for (let i = 1; i < all.length; i++) d.push(Math.abs(all[i][0] - all[i - 1][0]) + Math.abs(all[i][1] - all[i - 1][1]) || 40);
-    const tot = d.reduce((a, b) => a + b, 0); let acc = 0;
-    const pts = [[0, ...all[0]]]; for (let i = 1; i < all.length; i++) { acc += d[i - 1]; pts.push([Math.round(acc / tot * 1000) / 10, ...all[i]]); }
-    return walker(CHAR[from], 'hand', pts, Math.max(8, tot / 22), { once: true, carry: G(folder, 'class="fold"'), mood: 'happy' });
+    const d = []; for (let k = 1; k < all.length; k++) d.push(Math.abs(all[k][0] - all[k - 1][0]) + Math.abs(all[k][1] - all[k - 1][1]) || 40);
+    const tot = d.reduce((a, b) => a + b, 0), secs = Math.max(8, tot / 22); let acc = 0, arriveAt = 0;
+    const pts = [[0, ...all[0]]];
+    for (let k = 1; k < all.length; k++) { acc += d[k - 1]; pts.push([Math.round(acc / tot * 1000) / 10, ...all[k]]); if (k === go.length - 1) arriveAt = acc / tot * secs; }
+    const age = Math.min(Math.max(0, st0.handoffAge || 0), secs);   // seconds the step has already been running
+    const arrive = Math.max(0, arriveAt - age);
+    let svg = walker(CHAR[from], 'hand', pts, secs, { once: true, carry: G(folder, `style="animation:hideAt .05s linear ${arrive}s 1 forwards"`), mood: 'happy' });
+    if (age > 0) pathCss = pathCss.replace(/\.(p|m|s|f)-hand\{animation:([^}]*)\}/g, (m0, k, a) => `.${k}-hand{animation:${a};animation-delay:-${age}s}`);
+    return { svg, arrive };
   };
+  // the receiver waits at its place until the folder arrives, then starts working
+  const late = (role, working, waiting) => (hand && hand.to === role && H)
+    ? G(working, `style="opacity:0;animation:showAt .05s linear ${H.arrive}s 1 forwards"`) + G(waiting, `style="animation:hideAt .05s linear ${H.arrive}s 1 forwards"`)
+    : working;
   const workGlow = (x, y, w, h) => rect(x, y, w, h, '#FFF59D', '', .07);
   const glyphs = (x, y, col = '#B9FFE9') => [0, 1, 2, 3].map(i => rect(x + i * 3, y, 1.5, 1.5, col, `rise r${i}`, 0)).join('');
   const gear = (x, y) => G(G(rect(-1, -4, 2, 8, '#FFD54F') + rect(-4, -1, 8, 2, '#FFD54F') + `<rect x="-2.5" y="-2.5" width="5" height="5" fill="#FFB300" transform="rotate(45)"/>` + rect(-1, -1, 2, 2, '#5D4037'), 'class="spin"'), `transform="translate(${x} ${y})"`);
@@ -133,10 +152,11 @@ export function officeSvg(A, s = {}) {
   back += tag(224, 112, 'Chủ tịch', st.approval || done, '#7A4A2E');
   const P = Math.max(0, Math.min(1, st0.progress ?? 0)), hand = st0.handoff && !st0.allDone ? st0.handoff : null;
   const skip = (role) => hand && hand.from === role;
-  if (hand) walk += handoff(hand.from, hand.to);
+  const H = hand ? handoff(hand.from, hand.to) : null;
+  if (H) walk += H.svg;
   // ---------- plan ----------
   const opusOn = at('plan') || (at('research') && st.bench === 'all-opus');
-  if (opusOn) { mid += frantic('opus', 36, 78, P, err); top += gear(28, 70); under += workGlow(0, 44, 84, 84); }
+  if (opusOn) { mid += late('plan', frantic('opus', 36, 78, P, err), actor('opus', 36, 78, 'happy')); top += gear(28, 70); under += workGlow(0, 44, 84, 84); }
   else if (!skip('plan')) walk += walker('opus', 'opusIdle', [[0, 36, 70], [15, 36, 70], [32, 56, 50], [70, 56, 50], [86, 36, 70], [100, 36, 70]], 16, { act: ACT.coffee, mood: done || past('plan') ? 'happy' : '' });
   front += screen(21, 82, 16, 9, opusOn, err ? 'err' : 'ok') + screen(53, 82, 16, 9, opusOn, err ? 'err' : 'ok');
   if (opusOn && !err) top += glyphs(24, 80, '#D1C4E9') + glyphs(56, 80, '#D1C4E9');
@@ -145,7 +165,7 @@ export function officeSvg(A, s = {}) {
   back += tag(4, 118, cut(L.plan), opusOn, '#5E35B1');
   // ---------- research ----------
   const res = at('research');
-  if (res) { walk += walker('sonnet', 'res', [[0, 124, 52], [8, 124, 52], [30, 100, 42], [60, 100, 42], [86, 124, 52], [100, 124, 52]], 6, { carry: G(img(S.book, 12, 11, 6, 6), 'class="book"'), mood: err ? 'worried' : 'red', rush: true, hp: P, bad: err }); under += workGlow(88, 44, 82, 84); if (!err) top += glyphs(140, 80) + gear(150, 74); }
+  if (res) { walk += late('research', walker('sonnet', 'res', [[0, 124, 52], [8, 124, 52], [30, 100, 42], [60, 100, 42], [86, 124, 52], [100, 124, 52]], 6, { carry: G(img(S.book, 12, 11, 6, 6), 'class="book"'), mood: err ? 'worried' : 'red', rush: true, hp: P, bad: err }), actor('sonnet', 124, 52, 'happy', true)); under += workGlow(88, 44, 82, 84); if (!err) top += glyphs(140, 80) + gear(150, 74); }
   else if (!skip('research')) walk += walker('sonnet', 'sonIdle', [[0, 118, 70], [14, 118, 70], [34, 128, 36], [74, 128, 36], [90, 118, 70], [100, 118, 70]], 18, { act: ACT.view, mood: 'happy' });
   front += screen(137, 82, 16, 9, res, err ? 'err' : 'ok');
   back += rect(92, 66, Math.round(42 * (past('research') ? 1 : res ? st.research : 0)), 1.5, '#26A69A');
@@ -155,7 +175,7 @@ export function officeSvg(A, s = {}) {
   const rOn = at('render'), rp = past('render') ? 1 : rOn ? st.render : 0;
   for (const x0 of [4, 26]) for (let j = 0; j < 8; j++) back += rect(x0 + 3, 180 + j * 6, 1.5, 1.5, rOn ? (err && j % 3 === 0 ? '#FF5252' : '#69F0AE') : '#33404C', rOn ? `led l${(j + x0) % 3}` : '') + rect(x0 + 6, 180 + j * 6, 1.5, 1.5, rOn ? '#FFD54F' : '#33404C', rOn ? `led l${(j + x0 + 1) % 3}` : '');
   back += rect(4, 229.5, 42, 3, '#10161B') + rect(5, 230.5, Math.round(40 * rp), 1, err && rOn ? '#FF5252' : '#69F0AE');
-  if (rOn) { mid += frantic('tech', 58, 186, P, err); under += workGlow(0, 168, 84, 88); if (!err) top += gear(50, 180) + [8, 18, 30, 40].map((x, i) => rect(x, 170, 1, 3, '#B3E5FC', `heat h${i % 3}`, 0)).join(''); }
+  if (rOn) { mid += late('build', frantic('tech', 58, 186, P, err), actor('tech', 58, 186, 'happy', true)); under += workGlow(0, 168, 84, 88); if (!err) top += gear(50, 180) + [8, 18, 30, 40].map((x, i) => rect(x, 170, 1, 3, '#B3E5FC', `heat h${i % 3}`, 0)).join(''); }
   else if (!skip('build')) walk += walker('tech', 'techIdle', [[0, 20, 206], [16, 20, 206], [34, 58, 206], [80, 58, 206], [94, 20, 206], [100, 20, 206]], 18, { act: ACT.game, mood: 'happy' });
   front += screen(56, 197, 14, 8, rOn, err ? 'err' : 'ok');
   if (rOn && !err) top += glyphs(58, 196);
@@ -163,7 +183,7 @@ export function officeSvg(A, s = {}) {
   back += tag(3, 247, cut(L.build, 13) + (rOn ? ` ${Math.round(rp * 100)}%` : ''), rOn, '#37474F');
   // ---------- check ----------
   const qOn = at('qa');
-  if (qOn) { walk += walker('qa', 'qa', [[0, 126, 188], [8, 126, 188], [34, 102, 188], [64, 102, 188], [90, 126, 188], [100, 126, 188]], 6, { carry: img(S.clip, -3, 11, 6, 8), mood: err ? 'worried' : 'red', rush: true, hp: P, bad: err }); under += workGlow(88, 168, 80, 88); if (!err) top += [0, 1, 2, 3, 4].map(i => rect(98, 177 + i * 3, 2, 2, '#43A047', `chk c${i}`, 0)).join(''); }
+  if (qOn) { walk += late('check', walker('qa', 'qa', [[0, 126, 188], [8, 126, 188], [34, 102, 188], [64, 102, 188], [90, 126, 188], [100, 126, 188]], 6, { carry: img(S.clip, -3, 11, 6, 8), mood: err ? 'worried' : 'red', rush: true, hp: P, bad: err }), actor('qa', 126, 188, 'happy', true)); under += workGlow(88, 168, 80, 88); if (!err) top += [0, 1, 2, 3, 4].map(i => rect(98, 177 + i * 3, 2, 2, '#43A047', `chk c${i}`, 0)).join(''); }
   else if (!skip('check')) walk += walker('qa', 'qaIdle', [[0, 124, 190], [14, 124, 190], [34, 146, 196], [80, 146, 196], [94, 124, 190], [100, 124, 190]], 18, { act: ACT.noodles, mood: 'happy' });
   front += screen(109, 206, 16, 9, qOn, err ? 'err' : 'ok') + screen(139, 206, 16, 9, qOn, err ? 'err' : 'ok');
   if (qOn && err) { top += bubble('err', 112, 160); under += zoneAlarm(88, 168, 80, 88); }
@@ -171,7 +191,7 @@ export function officeSvg(A, s = {}) {
   // ---------- store / courier ----------
   const fetch = at('inputs'), deliver = at('deliver');
   if (fetch) { walk += walker('courier', 'fetch', [[0, 190, 196], [5, 207, 196], [17, 207, 130], [40, 80, 130], [46, 80, 100], [56, 80, 100], [62, 80, 130], [85, 207, 130], [96, 207, 196], [100, 190, 196]], 12, { carry: img(S.crate, -5, 11, 10, 9), mood: err ? 'worried' : 'red', rush: true, hp: P, bad: err }); under += workGlow(172, 168, 84, 88); }
-  else if (deliver) { walk += walker('courier', 'deliver', [[0, 190, 196], [8, 207, 196], [26, 207, 130], [36, 208, 100], [58, 208, 100], [68, 207, 130], [90, 207, 196], [100, 190, 196]], 9, { carry: img(S.reel, -5, 10, 10, 10), mood: err ? 'worried' : 'happy', rush: true, hp: P, bad: err }); under += workGlow(172, 44, 84, 84); }
+  else if (deliver) { walk += late('deliver', walker('courier', 'deliver', [[0, 190, 196], [8, 207, 196], [26, 207, 130], [36, 208, 100], [58, 208, 100], [68, 207, 130], [90, 207, 196], [100, 190, 196]], 9, { carry: img(S.reel, -5, 10, 10, 10), mood: err ? 'worried' : 'happy', rush: true, hp: P, bad: err }), actor('courier', 190, 196, 'happy', true)); under += workGlow(172, 44, 84, 84); }
   else if (!skip('fetch') && !skip('deliver')) walk += walker('courier', 'courIdle', [[0, 188, 196], [14, 188, 196], [34, 214, 200], [80, 214, 200], [94, 188, 196], [100, 188, 196]], 17, { act: ACT.phone, mood: done ? 'happy' : '' });
   if ((fetch || deliver) && err) { top += bubble('err', 214, 162); under += zoneAlarm(172, 168, 84, 88); }
   back += tag(176, 247, cut(deliver ? L.deliver : L.fetch, 15), fetch || deliver, '#8D6234');
@@ -243,7 +263,7 @@ export function officeSvg(A, s = {}) {
 .catf{animation:catf 32s step-end infinite}@keyframes catf{0%{transform:matrix(-1,0,0,1,18,0)}40%{transform:none}}
 .catb2{animation:catb 32s step-end infinite}@keyframes catb{0%{animation-timing-function:step-end}}
 .catz{opacity:0;animation:catz 32s step-end infinite}@keyframes catz{0%{opacity:0}62%{opacity:1}}
-.cateat{opacity:0;animation:cate 32s step-end infinite}@keyframes cate{0%{opacity:0}18%{opacity:1}40%{opacity:0}}` + pathCss;
+.cateat{opacity:0;animation:cate 32s step-end infinite}@keyframes cate{0%{opacity:0}18%{opacity:1}40%{opacity:0}}@keyframes showAt{to{opacity:1}}@keyframes hideAt{to{opacity:0}}` + pathCss;
   const open = (px) => `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" shape-rendering="crispEdges" width="${px}" height="${px}">`;
   return { full: (px = 512) => open(px) + `<style>${css}</style>${A.bg}${under}${back}${mid}${A.fg}${front}${walk}${top}</svg>`, bg: (px = 512) => open(px) + A.bg + '</svg>', scene: (px = 512) => open(px) + `<style>${css}</style>${under}${back}${mid}${A.fg}${front}${walk}${top}</svg>` };
 }

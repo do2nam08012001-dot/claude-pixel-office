@@ -53,7 +53,7 @@ function view(f: Film, now: number): View {
   const h = f.history ?? {}
   // a step that started in the last 40 s: the previous step's employee carries the work to the next room
   const cur0 = idx > 0 && idx < steps.length ? steps[idx] : null
-  if (cur0 && h[cur0.id]?.start && now - h[cur0.id].start < 40_000) scene = { ...scene, handoff: { from: steps[idx - 1].role, to: cur0.role } }
+  if (cur0 && h[cur0.id]?.start && now - h[cur0.id].start < 40_000) scene = { ...scene, handoff: { from: steps[idx - 1].role, to: cur0.role }, handoffAge: (now - h[cur0.id].start) / 1000 }
   const tooks = steps.map(s => (h[s.id]?.start && h[s.id]?.end ? (h[s.id].end! - h[s.id].start) / 1000 : undefined))
   const doneT = tooks.filter((x): x is number => typeof x === 'number')
   const avg = doneT.length ? doneT.reduce((a, b) => a + b, 0) / doneT.length : null
@@ -75,6 +75,9 @@ function view(f: Film, now: number): View {
     return { ...s, state: 'wait', guess }
   })
   if (allDone) remaining = 0
+  // progress per second of the current step, so the HP bar above the worker grows smoothly between refreshes
+  const curV = sv.find(s => s.state === 'now')
+  if (curV && curV.left && curV.left > 0) scene = { ...scene, rate: (1 - progress) / curV.left }
   const total = known && spent + (remaining ?? 0) > 0 ? spent / (spent + (remaining ?? 0)) : (Math.max(0, idx) + progress) / Math.max(1, steps.length)
   return { steps: sv, idx, allDone, progress, scene, total: allDone ? 1 : Math.min(0.99, total), remaining: known ? remaining : null, known }
 }
