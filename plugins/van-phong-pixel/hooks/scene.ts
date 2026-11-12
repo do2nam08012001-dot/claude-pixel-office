@@ -12,6 +12,46 @@ export function legacy(s) {
   return { active: ROLE_OF[s.stage] || null, progress: prog || 0, doneRoles, allDone: s.stage === 'done', blocked: s.blocked, approval: s.approval, bench: s.bench,
     labels: { fetch: 'Kho Drive', research: 'Sonnet · tư liệu', plan: 'Opus · kế hoạch', build: 'Render', check: 'QA · kiểm tra', deliver: 'Giao phim' } };
 }
+// Static art is made of filled pixel runs ("M x y h w v h h -w" chains). Split them at a row so the top and the
+// bottom halves of the office each carry only their own part (each half stays under the Svg size cap).
+function runsOf(d) {
+  const out = []; let x = 0, y = 0;
+  const tok = d.match(/[A-Za-z]|-?\d+(?:\.\d+)?/g) || []; let i = 0;
+  const num = () => Number(tok[i++]);
+  while (i < tok.length) {
+    const c = tok[i++];
+    if (c === 'M') { x = num(); y = num(); }
+    else if (c === 'm') { x += num(); y += num(); }
+    else if (c === 'h' && tok[i + 1] === 'v' || c === 'h' && tok[i] !== undefined && tok[i + 1] === 'v') {
+      const w = num(); i++; const h = num(); if (tok[i++] !== 'h') return null; const w2 = num();
+      out.push([x, y, w, h]); x += w + w2; y += h;
+    } else return null;
+  }
+  return out;
+}
+function enc(rs) {
+  let o = '', cx = null, cy = 0;
+  for (const [x, y, w, h] of rs) { o += cx === null ? `M${x} ${y}` : `m${x - cx} ${y - cy}`; o += `h${w}v${h}h-${w}`; cx = x; cy = y + h; }
+  return o;
+}
+const SPLIT = new Map();
+function splitArt(markup, B) {
+  const key = markup.length + ':' + B; if (SPLIT.has(key)) return SPLIT.get(key);
+  let top = '', bot = '';
+  for (const m of markup.matchAll(/<path fill="([^"]+)" d="([^"]+)"\/>|<[^>]+>/g)) {
+    if (!m[1]) { top += m[0]; bot += m[0]; continue; }
+    const rs = runsOf(m[2]);
+    if (!rs) { top += m[0]; bot += m[0]; continue; }
+    const a = [], b = [];
+    for (const [x, y, w, h] of rs) {
+      if (y < B) a.push([x, y, w, Math.min(h, B - y)]);
+      if (y + h > B) b.push([x, Math.max(y, B), w, y + h - Math.max(y, B)]);
+    }
+    if (a.length) top += `<path fill="${m[1]}" d="${enc(a)}"/>`;
+    if (b.length) bot += `<path fill="${m[1]}" d="${enc(b)}"/>`;
+  }
+  const r = [top, bot]; SPLIT.set(key, r); return r;
+}
 export function officeSvg(A, s = {}) {
   // Generic state: { active: role|null, progress 0..1, doneRoles: role[], allDone, blocked, approval, labels: {role: text} }
   // roles: fetch | research | plan | build | check | deliver. A legacy { stage } object is converted first.
@@ -72,13 +112,16 @@ export function officeSvg(A, s = {}) {
   // walker along waypoints [[t%, x, y], ...]; walks between points, stands at pauses doing `act`, faces its way
   const walker = (who, name, pts, secs, o = {}) => {
     const c = S[who], once = o.once ? '1 forwards' : 'infinite';
-    const pos = pts.map(([t, x, y]) => `${t}%{transform:translate(${x}px,${y}px)}`).join('');
+    // keyframes are kept short: times to 0.1 %, and the step-end tracks (walk/stand, facing) only where they change
+    const r1 = (t) => Math.round(t * 10) / 10;
+    const pos = pts.map(([t, x, y]) => `${r1(t)}%{transform:translate(${x}px,${y}px)}`).join('');
     const mv = [], sv = [], fc = [];
+    let lastMove = null, lastLeft = null;
     for (let i = 0; i < pts.length; i++) {
       const [t, x, y] = pts[i], n = pts[i + 1];
-      const moving = n && (n[1] !== x || n[2] !== y), left = n && n[1] < x;
-      mv.push(`${t}%{opacity:${moving ? 1 : 0}}`); sv.push(`${t}%{opacity:${moving ? 0 : 1}}`);
-      if (n && n[1] !== x) fc.push(`${t}%{transform:${left ? 'matrix(-1,0,0,1,16,0)' : 'none'}}`);
+      const moving = !!n && (n[1] !== x || n[2] !== y), left = n && n[1] < x;
+      if (moving !== lastMove) { mv.push(`${r1(t)}%{opacity:${moving ? 1 : 0}}`); sv.push(`${r1(t)}%{opacity:${moving ? 0 : 1}}`); lastMove = moving; }
+      if (n && n[1] !== x && left !== lastLeft) { fc.push(`${r1(t)}%{transform:${left ? 'matrix(-1,0,0,1,16,0)' : 'none'}}`); lastLeft = left; }
     }
     pathCss += `.p-${name}{animation:P${name} ${secs}s linear ${once}}@keyframes P${name}{${pos}}`
       + `.m-${name}{animation:M${name} ${secs}s step-end ${once}}@keyframes M${name}{${mv.join('')}}`
@@ -381,6 +424,17 @@ export function officeSvg(A, s = {}) {
   const bandDefs = () => '<defs>' + [...usedBands].map((id) => `<g id="${id}">${A.bands[id]}</g>`).join('') + '</defs>';
   return {
     base: (px = 512) => open(px) + patDefs() + floors() + '</svg>',
+    // the office as two pictures stacked in the flow (rows 0-160 and 160-256): no overlap, each under the size cap
+    halves: (px = 512) => {
+      const CUT = 160, [bgT, bgB] = splitArt(A.bg, CUT * 2), [fgT, fgB] = splitArt(A.fg, CUT * 2);
+      const css1 = `<style>${css.replace(/\n/g, '')}</style>`;
+      const one = (y0, h, bg, fg) => `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 ${y0} 256 ${h}" shape-rendering="crispEdges" width="${px}" height="${Math.round(px * h / 256)}">`
+        + '<defs>' + A.pats.map((p) => `<pattern id="${p.id}" x="${p.x}" y="${p.y}" width="${p.w}" height="${p.h}" patternUnits="userSpaceOnUse">${p.svg}</pattern>`).join('')
+        + [...usedBands].map((id) => `<g id="${id}">${A.bands[id]}</g>`).join('') + '</defs>' + css1
+        + half(A.pats.map((p) => p.areas.filter(([x, y, w, hh]) => y < (y0 + h) * 2 && y + hh > y0 * 2).map(([x, y, w, hh]) => `<rect x="${x}" y="${y}" width="${w}" height="${hh}" fill="url(#${p.id})"/>`).join('')).join('') + bg)
+        + `${under}${back}${mid}${half(fg)}${front}${walk}${top}</svg>`;
+      return [one(0, CUT, bgT, fgT), one(CUT, 256 - CUT, bgB, fgB)];
+    },
     layer: (px = 512) => { const body = `${under}${back}${mid}${half(A.fg)}${front}${walk}${top}`; return open(px) + bandDefs() + `<style>${css.replace(/\n/g, '')}</style>` + body + '</svg>' },
     full: (px = 512) => open(px) + defs() + `<style>${css.replace(/\n/g, '')}</style>${floors()}${under}${back}${mid}${half(A.fg)}${front}${walk}${top}</svg>` };
 }

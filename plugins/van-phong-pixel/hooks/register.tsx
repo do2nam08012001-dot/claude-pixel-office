@@ -44,8 +44,8 @@ let ticks = 0, driveCache: Film[] = [], driveError = ''
 const flags = new Map<string, string>()
 // last scene: reuse the same SVG while nothing visible changed, so the pane does not reload (flash)
 let sceneKey = '', sceneSvg = ''
-// the static floor and walls: one picture under the living layer, built once per width
-let baseSvg = '', basePx = 0
+// the office is two pictures (top / bottom half) stacked in the flow; kept joined by SEP
+const SEP = '\u0001'
 // double buffer: the old scene stays on top (overlay) while the new one loads underneath, then the overlay goes
 let shownSvg = '', overlaySvg = '', swapping = false
 
@@ -414,10 +414,10 @@ async function drawOffice($: any, e: any) {
   const key = JSON.stringify({ ...sceneState, now: undefined, progress: Math.round((sceneState.progress ?? 0) * 20), rate: undefined, handoffAge: undefined, px })
   if (key !== sceneKey) {
     sceneKey = key
-    sceneSvg = officeSvg(ASSETS, sceneState).layer(px)
-    if (sceneSvg.length > SVG_LIMIT) sceneSvg = officeSvg(ASSETS, { ...sceneState, lite: true }).layer(px)
+    let hv = officeSvg(ASSETS, sceneState).halves(px)
+    if (hv.some(x => x.length > SVG_LIMIT)) hv = officeSvg(ASSETS, { ...sceneState, lite: true }).halves(px)
+    sceneSvg = hv.join(SEP)
   }
-  if (basePx !== px) { baseSvg = officeSvg(ASSETS, { active: null, doneRoles: [] }).base(px); basePx = px }
   if (!shownSvg) shownSvg = sceneSvg
   else if (sceneSvg !== shownSvg && !swapping) {
     swapping = true; overlaySvg = shownSvg; const next = sceneSvg
@@ -464,11 +464,9 @@ async function drawOffice($: any, e: any) {
     <Box flexDirection="column" gap={1}>
       {Svg ? <Svg source={headerSvg(W, active.length, waits, errs, finished.length)} alt={`Văn phòng: ${active.length} đang chạy, ${waits} chờ duyệt, ${errs} lỗi`} /> : <Text bold>Văn phòng · chủ tịch</Text>}
       {Svg ? (
-        <Box key="office" position="relative" flexDirection="column" width={px} height={px}>
-          {/* the floor is drawn like the live layer (an image-mode Svg did not show, so the layer floated over the cards) */}
-          <Svg source={baseSvg} alt="" width={px} height={px} isInteractive />
-          <Box key="office-live" position="absolute" top={0} left={0}><Svg source={shownSvg} alt={shown ? `Văn phòng: ${shown.title || shown.slug}` : 'Văn phòng đang chờ việc'} width={px} height={px} isInteractive /></Box>
-          {overlaySvg ? <Box key="office-old" position="absolute" top={0} left={0}><Svg source={overlaySvg} alt="" width={px} height={px} isInteractive /></Box> : null}
+        <Box key="office" position="relative" flexDirection="column">
+          {shownSvg.split(SEP).map((src, i) => <Svg key={'h' + i} source={src} alt={i ? 'Văn phòng, tầng dưới' : (shown ? `Văn phòng: ${shown.title || shown.slug}` : 'Văn phòng đang chờ việc')} width={px} height={Math.round(px * (i ? 96 : 160) / 256)} isInteractive />)}
+          {overlaySvg ? <Box key="office-old" position="absolute" top={0} left={0} flexDirection="column">{overlaySvg.split(SEP).map((src, i) => <Svg key={'o' + i} source={src} alt="Văn phòng" width={px} height={Math.round(px * (i ? 96 : 160) / 256)} isInteractive />)}</Box> : null}
         </Box>
       ) : null}
       {list.length === 0 ? <Text dimColor>Phiên này chưa có việc nào. Việc bạn giao trong phiên này (gửi lên Drive / office-status init) sẽ hiện ở đây ngay.</Text> : null}
