@@ -1,35 +1,38 @@
 # van-phong-pixel — pixel office pane
 
 A pane beside the Claude Code chat: a pixel office where you are the chairman and every step of a job is an employee
-who walks, types and reacts according to the job's real status. Every 30 seconds it reads status files from Google Drive
-with `rclone` and draws:
+who walks, types and reacts according to the job's real status. Every 30 seconds it reads status files and draws:
 
-- the employee of the current step at work (store clerk fetching inputs, researcher at the bookshelf, planner typing,
-  render tech at the servers, QA walking to the checklist, courier delivering the film to the chairman);
-- a red **!** over whoever is blocked, an orange **!** over the chairman when something waits for your approval,
-  a green **✓** with confetti when the job is done; everyone else dozes until it is their turn;
-- one row per job: step, render progress bar, ETA, and a warning when a job has not updated for 15 minutes;
-- an inbox of errors and approvals.
+- the employee of the current step at work, everyone whose step is over relaxed, everyone not yet needed dozing (z z);
+- a red **!** over the employee of a blocked step, an orange **!** over the chairman when something waits for approval,
+  a green **✓** with confetti when the job is done;
+- one row per job: current step, progress bar, ETA, the whole step list (✓ done · ● now · ! blocked · ○ later), and a
+  warning when a job has not updated for 15 minutes;
+- an inbox of errors and approvals. "Xem" shows a job in the office, "Làm mới" reads at once, `/van-phong` reopens the pane.
 
-## Requirements
+## Sources
 
-- Claude Code desktop (the scene is an SVG; other surfaces show the text rows only).
-- `rclone` with a remote named `gdrive` (`rclone config`), able to read `gdrive:jp-studio`.
+1. `~/.claude/van-phong/status/*.json` on this computer (write them with `tools/office-status.mjs` from the repository).
+2. Google Drive (or any rclone remote): `<drive>/*/status/*.json`, default `gdrive:jp-studio`; set
+   `{"drive": "remote:path"}` or `{"drive": ""}` in `~/.claude/van-phong/config.json`. Needs `rclone` with that remote.
 
-## Status files
-
-One JSON object per job, one line, at `gdrive:jp-studio/<skill>/status/<slug>.json`:
+## Status file (v2, any workflow)
 
 ```json
-{"slug":"my-film","skill":"jp-history-video","title":"My film","stage":"render","render":0.62,"eta":840,
- "blocked":false,"approval":false,"message":"","updated":1794462905164}
+{"slug":"blog-01","title":"Viết blog","group":"blog",
+ "workflow":[{"id":"collect","label":"Thu thập","role":"fetch"},{"id":"write","label":"Viết bài","role":"build"},
+             {"id":"review","label":"Biên tập","role":"check"},{"id":"publish","label":"Đăng bài","role":"deliver"}],
+ "step":"write","progress":0.35,"eta":900,"blocked":false,"approval":false,"message":"","done":false,
+ "updated":1794465277908}
 ```
 
-`stage` is one of `idle`, `inputs`, `research`, `plan`, `render`, `qa`, `deliver`, `done`; `render` is 0–1; `eta` is
-seconds; `updated` is milliseconds since the epoch. Set `blocked` (with a short `message`) when the job is stuck, and
-`approval` when it waits for the user. Any job that writes these files appears in the office.
+- `role`: `fetch` · `research` · `plan` · `build` · `check` · `deliver` (room and employee); missing → by position.
+- `step`: the current step's `id`; `"done"` or `"done": true` when finished. `progress` 0–1 of that step, `eta` seconds.
+- `blocked` + `message` when stuck; `approval` + `message` when it waits for the user. `updated` is ms since the epoch.
 
-## Use
+## Status file (v1, the jp video pipeline)
 
-The pane opens when a session starts; `/van-phong` opens it again. "Xem" on a row shows that job in the office,
-"Làm mới" reads Drive at once.
+`{"slug","skill","title","stage","render","eta","blocked","approval","message","updated"}` with `stage` one of
+`idle inputs research plan render qa deliver done` — still supported unchanged.
+
+Requires Claude Code desktop for the drawing (other surfaces show the text rows only).

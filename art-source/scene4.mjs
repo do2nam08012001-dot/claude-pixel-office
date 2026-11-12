@@ -2,9 +2,28 @@
 // state: { stage, render, plan, research, blocked, approval, bench }
 //   stage: idle | inputs | research | plan | render | qa | deliver | done
 const ORDER = ['idle', 'inputs', 'research', 'plan', 'render', 'qa', 'deliver', 'done'];
+const ROLE_OF = { inputs: 'fetch', research: 'research', plan: 'plan', render: 'build', qa: 'check', deliver: 'deliver' };
+// legacy video status { stage, render, plan, research, blocked, approval } -> generic
+export function legacy(s) {
+  const i = ORDER.indexOf(s.stage || 'idle');
+  const doneRoles = ORDER.slice(1, Math.max(1, i)).map((k) => ROLE_OF[k]).filter(Boolean);
+  const prog = s.stage === 'render' ? s.render : s.stage === 'plan' ? s.plan : s.stage === 'research' ? s.research : 0;
+  return { active: ROLE_OF[s.stage] || null, progress: prog || 0, doneRoles, allDone: s.stage === 'done', blocked: s.blocked, approval: s.approval, bench: s.bench,
+    labels: { fetch: 'Kho Drive', research: 'Sonnet · tư liệu', plan: 'Opus · kế hoạch', build: 'Render', check: 'QA · kiểm tra', deliver: 'Giao phim' } };
+}
 export function officeSvg(A, s = {}) {
-  const st = { stage: 'idle', render: 0, plan: 0, research: 0, blocked: false, approval: false, ...s };
-  const at = (k) => st.stage === k, past = (k) => ORDER.indexOf(st.stage) > ORDER.indexOf(k), done = at('done');
+  // Generic state: { active: role|null, progress 0..1, doneRoles: role[], allDone, blocked, approval, labels: {role: text} }
+  // roles: fetch | research | plan | build | check | deliver. A legacy { stage } object is converted first.
+  const st0 = s.active !== undefined || s.doneRoles ? s : legacy(s);
+  const R = { inputs: 'fetch', research: 'research', plan: 'plan', render: 'build', qa: 'check', deliver: 'deliver' };
+  const doneSet = new Set(st0.doneRoles || []);
+  const at = (k) => k === 'done' ? !!st0.allDone : st0.active === R[k];
+  const past = (k) => !!st0.allDone || doneSet.has(R[k]);
+  const prog = (k) => past(k) ? 1 : at(k) ? Math.max(0, Math.min(1, st0.progress ?? 0)) : 0;
+  const st = { blocked: !!st0.blocked, approval: !!st0.approval, bench: st0.bench, plan: prog('plan'), research: prog('research'), render: prog('render') };
+  const L = { fetch: 'Kho', research: 'Tư liệu', plan: 'Kế hoạch', build: 'Sản xuất', check: 'Kiểm tra', deliver: 'Giao', ...(st0.labels || {}) };
+  const cut = (t, n = 18) => { const a = [...String(t)]; return a.length > n ? a.slice(0, n - 1).join('') + '…' : a.join(''); };
+  const done = at('done');
   const S = A.sprites;
   const img = (h, x, y, w, hh, c = '') => `<g${x || y ? ` transform="translate(${x} ${y})"` : ''}${c ? ` class="${c}"` : ''}>${h}</g>`;
   const rect = (x, y, w, h, f, c = '', o) => `<rect x="${x}" y="${y}" width="${w}" height="${h}" fill="${f}"${o != null ? ` opacity="${o}"` : ''}${c ? ` class="${c}"` : ''}/>`;
@@ -61,7 +80,7 @@ export function officeSvg(A, s = {}) {
   for (let i = 0; i < 4; i++) back += rect(26, 9 + i * 3, Math.round(Math.max(0, Math.min(1, st.plan * 4 - i)) * 30), 1.5, '#7E57C2');
   if (opusOn && err) { top += bubble('err', 46, 60); under += zoneAlarm(0, 44, 84, 84); }
   else if (!opusOn && !past('plan') && !done) top += zz(50, 76);
-  back += tag(4, 118, 'Opus · kế hoạch', opusOn, '#5E35B1');
+  back += tag(4, 118, cut(L.plan), opusOn, '#5E35B1');
   // ---------- Sonnet ----------
   const res = at('research');
   if (res) walk += walker('sonnet', 'res', G(img(S.book, 12, 11, 6, 6), 'class="book"'), err);
@@ -70,7 +89,7 @@ export function officeSvg(A, s = {}) {
   for (let i = 0; i < 1; i++) back += rect(92, 66, Math.round(42 * (past('research') ? 1 : res ? st.research : 0)), 1.5, '#26A69A');
   if (res && err) { top += bubble('err', 126, 30); under += zoneAlarm(88, 44, 82, 84); }
   else if (!res && !past('research') && !done) top += zz(132, 76);
-  back += tag(92, 118, 'Sonnet · tư liệu', res, '#00796B');
+  back += tag(92, 118, cut(L.research), res, '#00796B');
   // ---------- render ----------
   const rOn = at('render'), rp = past('render') ? 1 : rOn ? st.render : 0;
   for (const x0 of [4, 26]) for (let j = 0; j < 8; j++) back += rect(x0 + 3, 180 + j * 6, 1.5, 1.5, rOn ? (err && j % 3 === 0 ? '#FF5252' : '#69F0AE') : '#33404C', rOn ? `led l${(j + x0) % 3}` : '') + rect(x0 + 6, 180 + j * 6, 1.5, 1.5, rOn ? '#FFD54F' : '#33404C', rOn ? `led l${(j + x0 + 1) % 3}` : '');
@@ -80,7 +99,7 @@ export function officeSvg(A, s = {}) {
   front += screen(56, 197, 14, 8, rOn, err ? 'err' : 'ok');
   if (rOn && err) { top += bubble('err', 70, 168); under += zoneAlarm(0, 168, 84, 88); }
   else if (!rOn && !past('render') && !done) top += zz(30, 212);
-  back += tag(3, 247, `Render ${Math.round(rp * 100)}%`, rOn, '#37474F');
+  back += tag(3, 247, cut(L.build, 13) + (rOn ? ` ${Math.round(rp * 100)}%` : ''), rOn, '#37474F');
   // ---------- QA ----------
   const qOn = at('qa');
   if (qOn) walk += walker('qa', 'qa', img(S.clip, -3, 11, 6, 8), err);
@@ -88,14 +107,14 @@ export function officeSvg(A, s = {}) {
   front += screen(109, 206, 16, 9, qOn, err ? 'err' : 'ok') + screen(139, 206, 16, 9, qOn, err ? 'err' : 'ok');
   if (qOn && err) { top += bubble('err', 112, 168); under += zoneAlarm(88, 168, 80, 88); }
   else if (!qOn && !past('qa') && !done) top += zz(136, 200);
-  back += tag(106, 247, 'QA · kiểm tra', qOn, '#2E7D32');
+  back += tag(106, 247, cut(L.check, 16), qOn, '#2E7D32');
   // ---------- Drive store / courier ----------
   const fetch = at('inputs'), deliver = at('deliver');
   if (fetch) walk += walker('courier', 'fetch', img(S.crate, -5, 11, 10, 9), err);
   else if (deliver) walk += walker('courier', 'deliver', img(S.reel, -5, 10, 10, 10), err);
   else mid += actor('courier', 188, 196, done ? 'happy' : 'idle', true);
   if ((fetch || deliver) && err) { top += bubble('err', 214, 170); under += zoneAlarm(172, 168, 84, 88); }
-  back += tag(176, 247, 'Kho Drive', fetch || deliver, '#8D6234');
+  back += tag(176, 247, cut(deliver ? L.deliver : L.fetch, 15), fetch || deliver, '#8D6234');
   // ---------- ambience ----------
   mid += actor('guest', 48, 50, done ? 'happy' : 'idle', true) + G(rect(60, 63, 3, 4, '#FFFFFF') + rect(60, 63, 3, 1, '#4FC3F7'), 'class="sip"');
   mid += G(img(S.cat, 0, 0, 18, 10), 'transform="translate(132 140)"') + G(rect(147, 141, 2, 2, '#F57C00'), 'class="tail"') + G(`<text x="150" y="139" font-family="Consolas" font-size="4" fill="#E3F2FD" stroke="#2A1E1E" stroke-width=".5" paint-order="stroke">z</text>`, 'class="zz"');
