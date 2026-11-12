@@ -114,30 +114,34 @@ function view(f: Film, now: number): View {
     return { ...s, state: 'wait', guess, w: guess ?? 60 }
   })
   if (allDone) remaining = 0
-  // ONE share drives all three bars (total bar, the step's own bar, the HP bar over the worker)
-  const W = sv.reduce((a, s) => a + s.w, 0) || 1
-  const doneW = sv.reduce((a, s) => a + (s.state === 'done' ? s.w : 0), 0)
+  // TIME is the unit of every bar: a finished step is as wide as it took, the current one as wide as
+  // (time spent + time it still needs), later ones as their (pace-scaled / learned) estimate.
+  // So the total bar, its %, the step bar and the HP bar over the worker all say the same thing.
   const cur = sv.find(s => s.state === 'now')
-  let total = (doneW + (cur ? cur.w * frac : 0)) / W
-  // the job's own estimate (Claude in the cloud, smoothed): finish time and total % follow it
+  const futW = () => sv.reduce((a, s) => a + (s.state === 'wait' ? s.w : 0), 0)
+  const spentCur = cur?.elapsed ?? 0
+  // what the current step still needs on its own estimate (never zero: a step that ran over still needs a bit)
+  const curNeed = cur ? (cur.left != null && cur.left > 0 ? cur.left : Math.max(60, spentCur * 0.1)) : 0
+  let curLeft = curNeed
   const fin = finish.get(f.slug)
   if (fin && !allDone) {
+    // Claude's own estimate of the whole film: split what is left between this step and the later ones
     remaining = Math.max(60, (fin - now) / 1000); known = true; over = false
-    const starts = Object.values(h).map(x => x?.start).filter((x): x is number => typeof x === 'number')
-    const begun = starts.length ? Math.min(...starts) : null
-    if (begun) {
-      const spentJob = (now - begun) / 1000
-      total = spentJob / (spentJob + remaining)
-      // the current step's share that makes the segmented bar show exactly this total
-      if (cur && cur.w > 0) frac = Math.max(0, Math.min(0.98, (total * W - doneW) / cur.w))
-      total = Math.max(total, doneW / W)
-    }
+    const fut = futW(), share = curNeed + fut > 0 ? curNeed / (curNeed + fut) : 1
+    curLeft = remaining * share
+    const k = fut > 0 ? (remaining - curLeft) / fut : 1
+    for (const s of sv) if (s.state === 'wait') { s.w = s.w * k; s.guess = s.w }
   }
-  // time left in the current step: its share of what is left overall (by weight), else its own estimate
-  const restW = (cur ? cur.w * (1 - frac) : 0) + sv.reduce((a, s) => a + (s.state === 'wait' ? s.w : 0), 0)
-  const curLeft = cur ? (fin && remaining && restW > 0 ? remaining * cur.w * (1 - frac) / restW : cur.left ?? 0) : 0
-  if (fin && cur && curLeft > 0) cur.left = curLeft   // the step row shows the same time left
-  // the HP bar starts at the same share and grows at the rate that reaches the end when the step should finish
+  if (cur) {
+    cur.w = Math.max(1, spentCur + curLeft); cur.left = curLeft
+    frac = progress > 0.03 && !fin ? progress : Math.min(0.99, spentCur / cur.w)
+    if (progress > 0.03 && !fin) cur.w = Math.max(cur.w, spentCur / Math.max(0.01, progress))
+  }
+  const W = sv.reduce((a, s) => a + s.w, 0) || 1
+  const doneW = sv.reduce((a, s) => a + (s.state === 'done' ? s.w : 0), 0)
+  const total = (doneW + (cur ? cur.w * frac : 0)) / W
+  if (!fin && !over) remaining = known ? Math.max(0, W - doneW - (cur ? cur.w * frac : 0)) : remaining
+  // the HP bar starts at the same share and fills exactly when the step should end
   scene = { ...scene, progress: frac, rate: curLeft > 0 ? (1 - frac) / curLeft : 0 }
   return { over, steps: sv, idx, allDone, progress, frac, scene, total: allDone ? 1 : Math.min(0.99, total), remaining: known ? remaining : null, known }
 }
@@ -230,6 +234,11 @@ async function refreshInner($: any) {
     for (const m of mine0) if (!m.skill) { const c = driveCache.find(x => x.slug === m.slug); if (c?.skill) await update($, owned, (o: Owned[]) => (o ?? []).map(x => x.slug === m.slug ? { ...x, skill: c.skill } : x)) }
   }
   if (drive) { for (const o of driveCache) if (!all.some(f => f.slug === o.slug)) all.push(o); if (driveError) errors.push(driveError) }
+  // a claimed job that never appeared anywhere (failed command) leaves after 4 minutes
+  {
+    const ghosts = ((await read($, owned)) ?? []).filter(m => Date.now() - m.at > 4 * 60_000 && !all.some(f => f.slug === m.slug)).map(m => m.slug)
+    if (ghosts.length && !driveError) await update($, owned, (o: Owned[]) => (o ?? []).filter(x => !ghosts.includes(x.slug)))
+  }
   // this session's jobs; one not on Drive yet shows at once as "uploading"
   const mine = (await read($, owned)) ?? []
   const list: Film[] = mine.map(m => all.find(f => f.slug === m.slug)
@@ -305,7 +314,9 @@ async function drop($: any, f: Film, purge: boolean) {
   void refresh($)
 }
 // a Bash call of this session that sends a job: the job belongs to this session from that moment
-const SEND = /local\/send\.sh["']?\s+([a-z0-9][a-z0-9-]*)/, INIT = /office-status\.mjs["']?\s+init\s+["']?([A-Za-z0-9._-]+)/
+// only a real invocation counts (at a command position), not a command that merely mentions the script
+const SEND = /(?:^|[;&|(]\s*|\n\s*)(?:timeout\s+\d+\s+)?(?:bash|sh)\s+["']?(?:[^\s"';&|]*\/)?local\/send\.sh["']?\s+([a-z0-9][a-z0-9-]*)/
+const INIT = /(?:^|[;&|(]\s*|\n\s*)node\s+["']?(?:[^\s"';&|]*\/)?office-status\.mjs["']?\s+init\s+["']?([A-Za-z0-9._-]+)/
 const TITLE_RE = /--title\s+(?:"([^"]*)"|'([^']*)')/
 async function claim($: any, command: string) {
   const m = SEND.exec(command) ?? INIT.exec(command)
