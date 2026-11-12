@@ -40,6 +40,8 @@ let ticks = 0, driveCache: Film[] = [], driveError = ''
 const flags = new Map<string, string>()
 // last scene: reuse the same SVG while nothing visible changed, so the pane does not reload (flash)
 let sceneKey = '', sceneSvg = ''
+// the static floor and walls: one picture under the living layer, built once per width
+let baseSvg = '', basePx = 0
 // double buffer: the old scene stays on top (overlay) while the new one loads underneath, then the overlay goes
 let shownSvg = '', overlaySvg = '', swapping = false
 
@@ -407,9 +409,10 @@ async function drawOffice($: any, e: any) {
   const key = JSON.stringify({ ...sceneState, progress: Math.round((sceneState.progress ?? 0) * 20), rate: undefined, handoffAge: undefined, px })
   if (key !== sceneKey) {
     sceneKey = key
-    sceneSvg = officeSvg(ASSETS, sceneState).full(px)
-    if (sceneSvg.length > SVG_LIMIT) sceneSvg = officeSvg(ASSETS, { ...sceneState, lite: true }).full(px)
+    sceneSvg = officeSvg(ASSETS, sceneState).layer(px)
+    if (sceneSvg.length > SVG_LIMIT) sceneSvg = officeSvg(ASSETS, { ...sceneState, lite: true }).layer(px)
   }
+  if (basePx !== px) { baseSvg = officeSvg(ASSETS, { active: null, doneRoles: [] }).base(px); basePx = px }
   if (!shownSvg) shownSvg = sceneSvg
   else if (sceneSvg !== shownSvg && !swapping) {
     swapping = true; overlaySvg = shownSvg; const next = sceneSvg
@@ -457,7 +460,8 @@ async function drawOffice($: any, e: any) {
       {Svg ? <Svg source={headerSvg(W, active.length, waits, errs, finished.length)} alt={`Văn phòng: ${active.length} đang chạy, ${waits} chờ duyệt, ${errs} lỗi`} /> : <Text bold>Văn phòng · chủ tịch</Text>}
       {Svg ? (
         <Box key="office" position="relative" flexDirection="column">
-          <Svg source={shownSvg} alt={shown ? `Văn phòng: ${shown.title || shown.slug}` : 'Văn phòng đang chờ việc'} width={px} height={px} isInteractive />
+          <Svg source={baseSvg} alt="" width={px} height={px} />
+          <Box key="office-live" position="absolute" top={0} left={0}><Svg source={shownSvg} alt={shown ? `Văn phòng: ${shown.title || shown.slug}` : 'Văn phòng đang chờ việc'} width={px} height={px} isInteractive /></Box>
           {overlaySvg ? <Box key="office-old" position="absolute" top={0} left={0}><Svg source={overlaySvg} alt="" width={px} height={px} isInteractive /></Box> : null}
         </Box>
       ) : null}
