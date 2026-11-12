@@ -23,6 +23,8 @@ const seen = new Map<string, { step: string; from?: string; to?: string; at: num
 let ticks = 0, driveCache: Film[] = [], driveError = ''
 // last scene: reuse the same SVG while nothing visible changed, so the pane does not reload (flash)
 let sceneKey = '', sceneSvg = ''
+// double buffer: the old scene stays on top (overlay) while the new one loads underneath, then the overlay goes
+let shownSvg = '', overlaySvg = '', swapping = false
 
 // Legacy video pipeline (v1 status files of the jp video repos); est = rough seconds per stage
 const VIDEO_STEPS: Step[] = [
@@ -205,13 +207,20 @@ export const register: Register = on => {
     const shown = list.find(f => f.slug === want) ?? active[0] ?? list[0]
     const errs = list.filter(f => f.blocked).length, waits = list.filter(f => f.approval && !f.blocked).length
     const sceneState = shown ? view(shown, now).scene : { active: null, doneRoles: [] }
-    const key = JSON.stringify({ ...sceneState, progress: Math.round((sceneState.progress ?? 0) * 20), rate: undefined, handoffAge: undefined, labels: sceneState.labels, px })
+    // progress is animated inside the SVG (HP bars run at the real rate), so only visible state changes redraw it
+    const key = JSON.stringify({ ...sceneState, progress: undefined, rate: undefined, handoffAge: undefined, px })
     if (key !== sceneKey) {
       sceneKey = key
       sceneSvg = officeSvg(ASSETS, sceneState).full(px)
       if (sceneSvg.length > SVG_LIMIT) sceneSvg = officeSvg(ASSETS, { ...sceneState, lite: true }).full(px)
     }
-    const scene = sceneSvg
+    if (!shownSvg) shownSvg = sceneSvg
+    else if (sceneSvg !== shownSvg && !swapping) {
+      swapping = true; overlaySvg = shownSvg; const next = sceneSvg
+      const redraw = () => update($, poll, (q: Poll) => ({ ...(q ?? { at: 0, error: '' }) }))
+      $.clock.after(900, async () => { shownSvg = next; await redraw()
+        $.clock.after(1600, async () => { overlaySvg = ''; swapping = false; await redraw() }) })
+    }
 
     const kindOf = (f: Film) => (f.blocked ? 'err' : f.approval ? 'wait' : isDone(f) ? 'done' : now - f.updated > STALE_MS ? 'stale' : 'run') as 'err' | 'wait' | 'done' | 'stale' | 'run'
     const KIND_T = { err: 'Lỗi', wait: 'Chờ duyệt', done: 'Xong', stale: 'Im lặng', run: 'Đang làm' }
@@ -239,7 +248,12 @@ export const register: Register = on => {
     return (
       <Box flexDirection="column" gap={1}>
         {Svg ? <Svg source={headerSvg(W, active.length, waits, errs, finished.length)} alt={`Văn phòng: ${active.length} đang chạy, ${waits} chờ duyệt, ${errs} lỗi`} /> : <Text bold>Văn phòng · chủ tịch</Text>}
-        {Svg ? <Svg source={scene} alt={shown ? `Văn phòng: ${shown.title || shown.slug}` : 'Văn phòng đang chờ việc'} width={px} height={px} isInteractive /> : null}
+        {Svg ? (
+          <Box key="office" position="relative" flexDirection="column">
+            <Svg source={shownSvg} alt={shown ? `Văn phòng: ${shown.title || shown.slug}` : 'Văn phòng đang chờ việc'} width={px} height={px} isInteractive />
+            {overlaySvg ? <Box key="office-old" position="absolute" top={0} left={0}><Svg source={overlaySvg} alt="" width={px} height={px} isInteractive /></Box> : null}
+          </Box>
+        ) : null}
         {list.length === 0 ? <Text dimColor>Chưa có việc nào. Ghi trạng thái bằng office-status (xem README) hoặc gửi việc từ repo video.</Text> : null}
         {active.map(card)}
         {finished.length > 0 && Svg ? <Svg source={doneShelfSvg(W, finished.slice(0, 6).map(f => ({ title: f.title || f.slug, when: clock(f.updated) })))} alt={`Đã xong ${finished.length} việc`} /> : null}
