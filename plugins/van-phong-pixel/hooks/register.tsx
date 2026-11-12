@@ -8,7 +8,9 @@ import type { CardStep } from './cards'
 
 const PANE = 'van-phong'
 const TITLE = 'Văn phòng'
-const POLL_MS = 30_000
+const POLL_MS = 10_000          // local status files
+const DRIVE_EVERY = 3           // Drive every 3rd poll (30 s)
+const HANDOFF_MS = 25_000       // how long a noticed step change plays the hand-off walk
 const STALE_MS = 15 * 60_000
 const SVG_LIMIT = 130_500
 const DEFAULT_DRIVE = 'gdrive:jp-studio'
@@ -16,6 +18,11 @@ const films = atom({ plugin: 'van-phong-pixel', key: 'films' } as const, [] as F
 const poll = atom({ plugin: 'van-phong-pixel', key: 'poll' } as const, { at: 0, error: '' } as Poll)
 const focus = atom({ plugin: 'van-phong-pixel', key: 'focus' } as const, '')
 let lastScrolled = ''
+// step changes the pane has noticed: slug -> { step, from, to, at }; the hand-off walk plays from the moment it is noticed
+const seen = new Map<string, { step: string; from?: string; to?: string; at: number }>()
+let ticks = 0, driveCache: Film[] = [], driveError = ''
+// last scene: reuse the same SVG while nothing visible changed, so the pane does not reload (flash)
+let sceneKey = '', sceneSvg = ''
 
 // Legacy video pipeline (v1 status files of the jp video repos); est = rough seconds per stage
 const VIDEO_STEPS: Step[] = [
@@ -53,7 +60,8 @@ function view(f: Film, now: number): View {
   const h = f.history ?? {}
   // a step that started in the last 40 s: the previous step's employee carries the work to the next room
   const cur0 = idx > 0 && idx < steps.length ? steps[idx] : null
-  if (cur0 && h[cur0.id]?.start && now - h[cur0.id].start < 40_000) scene = { ...scene, handoff: { from: steps[idx - 1].role, to: cur0.role }, handoffAge: (now - h[cur0.id].start) / 1000 }
+  const n = seen.get(f.slug)
+  if (cur0 && n && n.step === cur0.id && n.from && now - n.at < HANDOFF_MS) scene = { ...scene, handoff: { from: n.from, to: n.to }, handoffAge: (now - n.at) / 1000, handoffAt: n.at }
   const tooks = steps.map(s => (h[s.id]?.start && h[s.id]?.end ? (h[s.id].end! - h[s.id].start) / 1000 : undefined))
   const doneT = tooks.filter((x): x is number => typeof x === 'number')
   const avg = doneT.length ? doneT.reduce((a, b) => a + b, 0) / doneT.length : null
@@ -132,14 +140,25 @@ async function refresh($: any) {
       }
     } catch { /* no local folder */ }
   }
-  if (drive) {
+  const useDrive = drive && ticks++ % DRIVE_EVERY === 0
+  if (useDrive) {
+    driveCache = []; driveError = ''
     try {
       const bin = await rclone($)
       if (!bin) throw new Error('chưa cài rclone')
       const r = await $.process.run([bin, 'cat', drive, '--include', '/*/status/*.json'], { timeoutMs: 25000 })
       if (r.exitCode !== 0) throw new Error((r.stderr || 'rclone lỗi').split('\n').filter((l: string) => l && !l.includes('NOTICE')).slice(-1)[0] || 'rclone lỗi')
-      for (const o of objects(r.stdout)) if (o.slug && !list.some(f => f.slug === o.slug)) list.push({ ...o, source: 'drive' })
-    } catch (err: any) { errors.push(`Drive: ${String(err?.message ?? err).slice(0, 120)}`) }
+      for (const o of objects(r.stdout)) if (o.slug) driveCache.push({ ...o, source: 'drive' })
+    } catch (err: any) { driveError = `Drive: ${String(err?.message ?? err).slice(0, 120)}` }
+  }
+  if (drive) { for (const o of driveCache) if (!list.some(f => f.slug === o.slug)) list.push(o); if (driveError) errors.push(driveError) }
+  // notice step changes (the previous step's role hands the work to the new one)
+  const nowMs = Date.now()
+  for (const f of list) {
+    const v = view(f, nowMs), cur = v.idx >= 0 && v.idx < v.steps.length ? v.steps[v.idx] : null, key = cur ? cur.id : v.allDone ? 'done' : 'idle'
+    const prev = seen.get(f.slug)
+    if (!prev) seen.set(f.slug, { step: key, at: 0 })
+    else if (prev.step !== key) seen.set(f.slug, cur && v.idx > 0 ? { step: key, from: v.steps[v.idx - 1].role, to: cur.role, at: nowMs } : { step: key, at: 0 })
   }
   // active jobs first (newest first), finished ones after
   list.sort((a, b) => Number(isDone(a)) - Number(isDone(b)) || b.updated - a.updated)
@@ -186,8 +205,13 @@ export const register: Register = on => {
     const shown = list.find(f => f.slug === want) ?? active[0] ?? list[0]
     const errs = list.filter(f => f.blocked).length, waits = list.filter(f => f.approval && !f.blocked).length
     const sceneState = shown ? view(shown, now).scene : { active: null, doneRoles: [] }
-    let scene = officeSvg(ASSETS, sceneState).full(px)
-    if (scene.length > SVG_LIMIT) scene = officeSvg(ASSETS, { ...sceneState, lite: true }).full(px)
+    const key = JSON.stringify({ ...sceneState, progress: Math.round((sceneState.progress ?? 0) * 20), rate: undefined, handoffAge: undefined, labels: sceneState.labels, px })
+    if (key !== sceneKey) {
+      sceneKey = key
+      sceneSvg = officeSvg(ASSETS, sceneState).full(px)
+      if (sceneSvg.length > SVG_LIMIT) sceneSvg = officeSvg(ASSETS, { ...sceneState, lite: true }).full(px)
+    }
+    const scene = sceneSvg
 
     const kindOf = (f: Film) => (f.blocked ? 'err' : f.approval ? 'wait' : isDone(f) ? 'done' : now - f.updated > STALE_MS ? 'stale' : 'run') as 'err' | 'wait' | 'done' | 'stale' | 'run'
     const KIND_T = { err: 'Lỗi', wait: 'Chờ duyệt', done: 'Xong', stale: 'Im lặng', run: 'Đang làm' }
@@ -215,7 +239,7 @@ export const register: Register = on => {
     return (
       <Box flexDirection="column" gap={1}>
         {Svg ? <Svg source={headerSvg(W, active.length, waits, errs, finished.length)} alt={`Văn phòng: ${active.length} đang chạy, ${waits} chờ duyệt, ${errs} lỗi`} /> : <Text bold>Văn phòng · chủ tịch</Text>}
-        {Svg ? <Svg source={scene} alt={shown ? `Văn phòng: ${shown.title || shown.slug}` : 'Văn phòng đang chờ việc'} width={px} height={px} isInteractive /> : null}
+        {Svg ? <Svg source={scene} alt={shown ? `Văn phòng: ${shown.title || shown.slug}` : 'Văn phòng đang chờ việc'} width={px} height={px} /> : null}
         {list.length === 0 ? <Text dimColor>Chưa có việc nào. Ghi trạng thái bằng office-status (xem README) hoặc gửi việc từ repo video.</Text> : null}
         {active.map(card)}
         {finished.length > 0 && Svg ? <Svg source={doneShelfSvg(W, finished.slice(0, 6).map(f => ({ title: f.title || f.slug, when: clock(f.updated) })))} alt={`Đã xong ${finished.length} việc`} /> : null}
@@ -225,7 +249,7 @@ export const register: Register = on => {
           </Box>
         ) : null}
         <Box flexDirection="row" justifyContent="space-between">
-          <Text dimColor>{p.error ? p.error : p.at ? `Cập nhật ${dur((now - p.at) / 1000)} trước · tự làm mới mỗi 30 giây` : 'Đang đọc trạng thái…'}</Text>
+          <Text dimColor>{p.error ? p.error : p.at ? `Cập nhật ${dur((now - p.at) / 1000)} trước · tự làm mới mỗi 10 giây` : 'Đang đọc trạng thái…'}</Text>
           <Button key="lam-moi" label="Làm mới" onPress={() => { lastScrolled = ''; return refresh($) }} />
         </Box>
       </Box>
