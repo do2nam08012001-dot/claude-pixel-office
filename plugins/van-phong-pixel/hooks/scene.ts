@@ -201,9 +201,8 @@ export function officeSvg(A, s = {}) {
 
   let under = '', back = '', mid = '', front = '', walk = '', top = '';
   // ---------- ambient light ----------
-  under += `<polygon points="140,28 164,28 152,118 110,118" fill="#FFF3C4" class="beam"/>`;
-  under += [0, 1, 2, 3, 4].map(i => rect(122 + i * 7, 60 + (i % 3) * 14, 1, 1, '#FFFFFF', `dust d${i % 3}`, .7)).join('');
-  under += `<ellipse cx="139" cy="74" rx="18" ry="6" fill="#FFE9A8" opacity=".22"/><ellipse cx="200" cy="92" rx="15" ry="5" fill="#FFE9A8" opacity=".25"/>`;
+  under += [[42, 62, 0], [128, 62, 1.5], [214, 64, 3], [42, 196, 2], [128, 196, 4], [214, 196, 1]].map(([x, y, dl]) => `<ellipse cx="${x}" cy="${y}" rx="34" ry="14" fill="#FFF1C9" opacity=".1" class="pool" style="animation-delay:-${dl}s"/>`).join('')
+    + G(rect(140, 8, 2, 8, '#FFFFFF', '', .5) + rect(144, 8, 1, 8, '#FFFFFF', '', .35), 'class="glint"');
   // ---------- chairman ----------
   const bossMode = done ? 'wave' : st.approval || err ? 'worried' : 'idle';
   top += done ? emote('heart', 222, 60, 0, 3) : err ? emote('bang', 222, 60, 0, 2) : st.approval ? '' : emote('star', 222, 60, 2, 7);
@@ -376,7 +375,8 @@ export function officeSvg(A, s = {}) {
 .scan{animation:scan .7s steps(3) infinite}@keyframes scan{100%{transform:translateY(2px)}}
 .zz{animation:zz 2.6s steps(8) infinite;opacity:0}@keyframes zz{15%{opacity:1}100%{transform:translate(4px,-9px);opacity:0}}
 .sweat{animation:sw 1s steps(2) infinite}@keyframes sw{50%{transform:translateY(2px);opacity:.4}}
-.beam{opacity:.12;animation:beam 6s ease-in-out infinite}@keyframes beam{50%{opacity:.2}}
+.pool{animation:pool 7s ease-in-out infinite}@keyframes pool{50%{opacity:.17}}
+.glint{animation:glint 9s ease-in-out infinite}@keyframes glint{0%,100%{transform:none;opacity:0}20%{opacity:1}60%{transform:translateX(18px);opacity:0}}
 .dust{animation:dust 7s linear infinite}.d1{animation-delay:-2.3s}.d2{animation-delay:-4.6s}@keyframes dust{0%{transform:translate(0,0);opacity:0}20%{opacity:.8}100%{transform:translate(-8px,22px);opacity:0}}
 .conf{animation:conf 2.2s linear infinite}.k1{animation-delay:-.5s}.k2{animation-delay:-1.1s}.k3{animation-delay:-1.6s}@keyframes conf{0%{transform:translateY(-4px) rotate(0)}100%{transform:translateY(130px) rotate(180deg)}}
 .spark{animation:spark 1s steps(2) infinite}.s1{animation-delay:.5s}@keyframes spark{50%{opacity:0}}
@@ -428,11 +428,11 @@ export function officeSvg(A, s = {}) {
     halves: (px = 512) => {
       const CUT = 160, [bgT, bgB] = splitArt(A.bg, CUT * 2), [fgT, fgB] = splitArt(A.fg, CUT * 2);
       const css1 = `<style>${css.replace(/\n/g, '')}</style>`;
-      const one = (y0, h, bg, fg) => `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 ${y0} 256 ${h}" shape-rendering="crispEdges" width="${px}" height="${Math.round(px * h / 256)}">`
+      const one = (y0, h, bg, fg) => `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 ${y0} 256 ${h}" shape-rendering="crispEdges" preserveAspectRatio="xMidYMin meet" overflow="hidden" width="${px}" height="${Math.round(px * h / 256)}">` + `<clipPath id="cut${y0}"><rect x="0" y="${y0}" width="256" height="${h}"/></clipPath><g clip-path="url(#cut${y0})">`
         + '<defs>' + A.pats.map((p) => `<pattern id="${p.id}" x="${p.x}" y="${p.y}" width="${p.w}" height="${p.h}" patternUnits="userSpaceOnUse">${p.svg}</pattern>`).join('')
         + [...usedBands].map((id) => `<g id="${id}">${A.bands[id]}</g>`).join('') + '</defs>' + css1
         + half(A.pats.map((p) => p.areas.filter(([x, y, w, hh]) => y < (y0 + h) * 2 && y + hh > y0 * 2).map(([x, y, w, hh]) => `<rect x="${x}" y="${y}" width="${w}" height="${hh}" fill="url(#${p.id})"/>`).join('')).join('') + bg)
-        + `${under}${back}${mid}${half(fg)}${front}${walk}${top}</svg>`;
+        + `${under}${back}${mid}${half(fg)}${front}${walk}${top}</g></svg>`;
       return [one(0, CUT, bgT, fgT), one(CUT, 256 - CUT, bgB, fgB)];
     },
     layer: (px = 512) => { const body = `${under}${back}${mid}${half(A.fg)}${front}${walk}${top}`; return open(px) + bandDefs() + `<style>${css.replace(/\n/g, '')}</style>` + body + '</svg>' },

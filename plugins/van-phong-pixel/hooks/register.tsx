@@ -465,8 +465,8 @@ async function drawOffice($: any, e: any) {
       {Svg ? <Svg source={headerSvg(W, active.length, waits, errs, finished.length)} alt={`Văn phòng: ${active.length} đang chạy, ${waits} chờ duyệt, ${errs} lỗi`} /> : <Text bold>Văn phòng · chủ tịch</Text>}
       {Svg ? (
         <Box key="office" position="relative" flexDirection="column">
-          {shownSvg.split(SEP).map((src, i) => <Svg key={'h' + i} source={src} alt={i ? 'Văn phòng, tầng dưới' : (shown ? `Văn phòng: ${shown.title || shown.slug}` : 'Văn phòng đang chờ việc')} width={px} height={Math.round(px * (i ? 96 : 160) / 256)} isInteractive />)}
-          {overlaySvg ? <Box key="office-old" position="absolute" top={0} left={0} flexDirection="column">{overlaySvg.split(SEP).map((src, i) => <Svg key={'o' + i} source={src} alt="Văn phòng" width={px} height={Math.round(px * (i ? 96 : 160) / 256)} isInteractive />)}</Box> : null}
+          {shownSvg.split(SEP).map((src, i) => <Svg key={'h' + i} source={src} alt={i ? 'Văn phòng, tầng dưới' : (shown ? `Văn phòng: ${shown.title || shown.slug}` : 'Văn phòng đang chờ việc')} width={px} isInteractive />)}
+          {overlaySvg ? <Box key="office-old" position="absolute" top={0} left={0} flexDirection="column">{overlaySvg.split(SEP).map((src, i) => <Svg key={'o' + i} source={src} alt="Văn phòng" width={px} isInteractive />)}</Box> : null}
         </Box>
       ) : null}
       {list.length === 0 ? <Text dimColor>Phiên này chưa có việc nào. Việc bạn giao trong phiên này (gửi lên Drive / office-status init) sẽ hiện ở đây ngay.</Text> : null}
