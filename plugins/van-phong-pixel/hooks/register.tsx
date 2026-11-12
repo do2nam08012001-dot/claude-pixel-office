@@ -459,8 +459,9 @@ async function drawOffice($: any, e: any) {
     <Box flexDirection="column" gap={1}>
       {Svg ? <Svg source={headerSvg(W, active.length, waits, errs, finished.length)} alt={`Văn phòng: ${active.length} đang chạy, ${waits} chờ duyệt, ${errs} lỗi`} /> : <Text bold>Văn phòng · chủ tịch</Text>}
       {Svg ? (
-        <Box key="office" position="relative" flexDirection="column">
-          <Svg source={baseSvg} alt="" width={px} height={px} />
+        <Box key="office" position="relative" flexDirection="column" width={px} height={px}>
+          {/* the floor is drawn like the live layer (an image-mode Svg did not show, so the layer floated over the cards) */}
+          <Svg source={baseSvg} alt="" width={px} height={px} isInteractive />
           <Box key="office-live" position="absolute" top={0} left={0}><Svg source={shownSvg} alt={shown ? `Văn phòng: ${shown.title || shown.slug}` : 'Văn phòng đang chờ việc'} width={px} height={px} isInteractive /></Box>
           {overlaySvg ? <Box key="office-old" position="absolute" top={0} left={0}><Svg source={overlaySvg} alt="" width={px} height={px} isInteractive /></Box> : null}
         </Box>
