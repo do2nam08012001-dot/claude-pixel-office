@@ -236,13 +236,13 @@ async function refreshInner($: any) {
           if (r.exitCode !== 0) throw new Error(fail(r))
           return r.stdout as string
         }))
-        for (const p of parts) for (const o of objects(p)) if (o.slug) fresh.push({ ...o, source: 'drive' })
+        for (const p of parts) for (const o of objects(p)) if (o.slug) { const j = fresh.findIndex(x => x.slug === o.slug); if (j < 0) fresh.push({ ...o, source: 'drive' }); else if ((o.updated ?? 0) > (fresh[j].updated ?? 0)) fresh[j] = { ...o, source: 'drive' } }
         driveCache = fresh; driveError = ''; scanOk = Date.now()   // swap only on success: a failed read keeps the last list
       } catch (err: any) { driveError = `Drive: ${String(err?.message ?? err).slice(0, 120)}` }
     } else {
       // this session's jobs: one small file each, read in parallel (a few seconds at most)
       const got = await Promise.all(mine0.map(async m => {
-        try { const r = await $.process.run([bin, 'cat', `${drive}/${m.skill}/status/${m.slug}.json`], { timeoutMs: 15000 }); return r.exitCode === 0 ? objects(r.stdout)[0] ?? null : null } catch { return null }
+        try { const r = await $.process.run([bin, 'cat', `${drive}/${m.skill}/status/${m.slug}.json`], { timeoutMs: 15000 }); return r.exitCode === 0 ? objects(r.stdout).sort((a: any, b: any) => (b.updated ?? 0) - (a.updated ?? 0))[0] ?? null : null } catch { return null }
       }))
       for (const o of got) if (o?.slug) driveCache = [...driveCache.filter(x => x.slug !== o.slug), { ...o, source: 'drive' }]
     }
