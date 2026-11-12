@@ -7,9 +7,10 @@ import { cardSvg, headerSvg, doneShelfSvg } from './cards'
 import type { CardStep } from './cards'
 
 const PANE = 'van-phong'
+const ROW = 'van-phong-row'
 const TITLE = 'Văn phòng'
 const POLL_MS = 10_000          // local status files
-const DRIVE_EVERY = 3           // Drive every 3rd poll (30 s)
+const DRIVE_EVERY = 1           // Drive on every poll (10 s): the origin session follows cloud jobs live
 const HANDOFF_MS = 25_000       // how long a noticed step change plays the hand-off walk
 const STALE_MS = 15 * 60_000
 const SVG_LIMIT = 130_500
@@ -21,6 +22,8 @@ let lastScrolled = ''
 // step changes the pane has noticed: slug -> { step, from, to, at }; the hand-off walk plays from the moment it is noticed
 const seen = new Map<string, { step: string; from?: string; to?: string; at: number }>()
 let ticks = 0, driveCache: Film[] = [], driveError = ''
+// last known flags per job, to raise a toast when a job gets blocked, waits for approval or finishes
+const flags = new Map<string, string>()
 // last scene: reuse the same SVG while nothing visible changed, so the pane does not reload (flash)
 let sceneKey = '', sceneSvg = ''
 // double buffer: the old scene stays on top (overlay) while the new one loads underneath, then the overlay goes
@@ -126,6 +129,15 @@ async function rclone($: any): Promise<string> {
   } catch { /* no powershell */ }
   return ''
 }
+function summary(list: Film[], now: number) {
+  if (!list.length) return 'Chưa có việc nào trong văn phòng.'
+  return list.slice(0, 8).map(f => {
+    const v = view(f, now), cur = v.idx >= 0 && v.idx < v.steps.length ? v.steps[v.idx] : null
+    const state = f.blocked ? 'LỖI' : f.approval ? 'CHỜ DUYỆT' : v.allDone ? 'XONG' : 'đang làm'
+    const eta = v.allDone ? '' : v.remaining != null ? ` · còn ~${dur(v.remaining)}` : ''
+    return `• ${f.title || f.slug} — ${state} · ${Math.round(v.total * 100)}%${cur ? ` · bước ${v.idx + 1}/${v.steps.length} ${cur.label}` : ''}${eta}${f.message ? ` · ${f.message}` : ''}`
+  }).join('\n')
+}
 const isDone = (f: Film) => !!f.done || f.step === 'done' || f.stage === 'done'
 
 async function refresh($: any) {
@@ -162,6 +174,17 @@ async function refresh($: any) {
     if (!prev) seen.set(f.slug, { step: key, at: 0 })
     else if (prev.step !== key) seen.set(f.slug, cur && v.idx > 0 ? { step: key, from: v.steps[v.idx - 1].role, to: cur.role, at: nowMs } : { step: key, at: 0 })
   }
+  // tell the chairman at once when something needs them or a job is done
+  for (const f of list) {
+    const now = isDone(f) ? 'done' : f.blocked ? 'err' : f.approval ? 'wait' : 'run', before = flags.get(f.slug)
+    if (before !== undefined && before !== now && now !== 'run') {
+      const msg = now === 'err' ? `Lỗi · ${f.title || f.slug}: ${f.message || 'bị vướng'} — trả lời ngay trong phiên này`
+        : now === 'wait' ? `Chờ duyệt · ${f.title || f.slug}: ${f.message || 'cần bạn trả lời'} — trả lời ngay trong phiên này`
+        : `Xong · ${f.title || f.slug} — gõ "lấy video" để tải về máy`
+      try { $.ui.toast(msg) } catch { /* no surface */ }
+    }
+    flags.set(f.slug, now)
+  }
   // active jobs first (newest first), finished ones after
   list.sort((a, b) => Number(isDone(a)) - Number(isDone(b)) || b.updated - a.updated)
   await update($, films, () => list)
@@ -177,6 +200,85 @@ async function refresh($: any) {
   }
 }
 
+// the office drawing: shared by the side pane and the transcript row (cloud sessions place no panes)
+async function drawOffice($: any, e: any) {
+  const els: any = $.ui.resolve(e)
+  const { Box, Text, Button } = els
+  const Svg = els.Svg
+  const list = (await read($, films)) ?? []
+  const p = (await read($, poll)) ?? { at: 0, error: '' }
+  const want = (await read($, focus)) ?? ''
+  const now = Date.now()
+  const cols = ((e.props as any)?.bodyColumns ?? e.viewport?.columns ?? 60) as number
+  const px = Math.round(Math.max(220, Math.min(720, cols * 8.6)))
+  const active = list.filter(f => !isDone(f)), finished = list.filter(isDone)
+  const shown = list.find(f => f.slug === want) ?? active[0] ?? list[0]
+  const errs = list.filter(f => f.blocked).length, waits = list.filter(f => f.approval && !f.blocked).length
+  const sceneState = shown ? view(shown, now).scene : { active: null, doneRoles: [] }
+  // progress is animated inside the SVG (HP bars run at the real rate), so only visible state changes redraw it
+  const key = JSON.stringify({ ...sceneState, progress: undefined, rate: undefined, handoffAge: undefined, px })
+  if (key !== sceneKey) {
+    sceneKey = key
+    sceneSvg = officeSvg(ASSETS, sceneState).full(px)
+    if (sceneSvg.length > SVG_LIMIT) sceneSvg = officeSvg(ASSETS, { ...sceneState, lite: true }).full(px)
+  }
+  if (!shownSvg) shownSvg = sceneSvg
+  else if (sceneSvg !== shownSvg && !swapping) {
+    swapping = true; overlaySvg = shownSvg; const next = sceneSvg
+    const redraw = () => update($, poll, (q: Poll) => ({ ...(q ?? { at: 0, error: '' }) }))
+    $.clock.after(900, async () => { shownSvg = next; await redraw()
+      $.clock.after(1600, async () => { overlaySvg = ''; swapping = false; await redraw() }) })
+  }
+
+  const kindOf = (f: Film) => (f.blocked ? 'err' : f.approval ? 'wait' : isDone(f) ? 'done' : now - f.updated > STALE_MS ? 'stale' : 'run') as 'err' | 'wait' | 'done' | 'stale' | 'run'
+  const KIND_T = { err: 'Lỗi', wait: 'Chờ duyệt', done: 'Xong', stale: 'Im lặng', run: 'Đang làm' }
+  const W = Math.max(240, px)
+  const card = (f: Film) => {
+    const v = view(f, now), kind = kindOf(f), focused = f.slug === shown?.slug
+    const group = GROUP_VI[f.group ?? f.skill ?? ''] ?? f.group ?? f.skill ?? ''
+    const etaText = v.allDone ? 'đã xong' : v.remaining == null ? 'chưa đủ dữ liệu để ước lượng' : `còn ~${dur(v.remaining)} · xong ~${clock(now + v.remaining * 1000)}`
+    const steps: CardStep[] = v.steps.map(s => ({
+      label: s.label, role: s.role, state: s.state, w: s.took ?? s.est ?? s.guess ?? s.left ?? 1,
+      took: s.took ? dur(s.took) : undefined, elapsed: s.elapsed ? dur(s.elapsed) : undefined,
+      left: s.left != null ? `~${dur(s.left)}` : undefined, guess: s.guess != null ? dur(s.guess) : undefined,
+    }))
+    const stale = kind === 'stale' ? `Không cập nhật ${dur((now - f.updated) / 1000)}: có thể đã dừng.` : ''
+    const message = f.blocked || f.approval ? (f.message || (f.blocked ? 'Công việc báo bị vướng.' : 'Công việc chờ bạn trả lời.')) : stale
+    const reply = f.blocked || f.approval ? (f.source === 'drive' ? 'Trả lời ngay trong phiên gốc này — Claude chuyển sang phiên cloud.' : 'Trả lời trong phiên đang chạy việc này.') : stale ? 'Hỏi Claude ở phiên gốc kiểm tra phiên cloud.' : ''
+    const svg = cardSvg({ title: f.title || f.slug, group, status: { t: KIND_T[kind], kind }, total: v.total, etaText, steps, progress: v.progress, message, reply, updatedText: `${dur((now - f.updated) / 1000)} trước`, focused }, W)
+    return (
+      <Box key={v.allDone ? `job-${f.slug}` : `cur-${f.slug}`} flexDirection="column">
+        {Svg ? <Svg source={svg} alt={`${f.title || f.slug}: ${KIND_T[kind]}, tổng ${Math.round(v.total * 100)}%, ${etaText}`} /> : <Text>{f.title || f.slug} · {KIND_T[kind]} · {Math.round(v.total * 100)}% · {etaText}</Text>}
+        {!focused ? <Box flexDirection="row" justifyContent="flex-end"><Button key={'xem-' + f.slug} label="Xem trong văn phòng" onPress={() => update($, focus, () => f.slug)} /></Box> : null}
+      </Box>
+    )
+  }
+  return (
+    <Box flexDirection="column" gap={1}>
+      {Svg ? <Svg source={headerSvg(W, active.length, waits, errs, finished.length)} alt={`Văn phòng: ${active.length} đang chạy, ${waits} chờ duyệt, ${errs} lỗi`} /> : <Text bold>Văn phòng · chủ tịch</Text>}
+      {Svg ? (
+        <Box key="office" position="relative" flexDirection="column">
+          <Svg source={shownSvg} alt={shown ? `Văn phòng: ${shown.title || shown.slug}` : 'Văn phòng đang chờ việc'} width={px} height={px} isInteractive />
+          {overlaySvg ? <Box key="office-old" position="absolute" top={0} left={0}><Svg source={overlaySvg} alt="" width={px} height={px} isInteractive /></Box> : null}
+        </Box>
+      ) : null}
+      {list.length === 0 ? <Text dimColor>Chưa có việc nào. Ghi trạng thái bằng office-status (xem README) hoặc gửi việc từ repo video.</Text> : null}
+      {active.map(card)}
+      {finished.length > 0 && Svg ? <Svg source={doneShelfSvg(W, finished.slice(0, 6).map(f => ({ title: f.title || f.slug, when: clock(f.updated) })))} alt={`Đã xong ${finished.length} việc`} /> : null}
+      {finished.length > 0 ? (
+        <Box flexDirection="row" gap={1} flexWrap="wrap">
+          {finished.slice(0, 6).map(f => <Button key={'xem-' + f.slug} label={`Xem ${[...(f.title || f.slug)].slice(0, 14).join('')}`} onPress={() => update($, focus, () => f.slug)} />)}
+        </Box>
+      ) : null}
+      <Box flexDirection="row" justifyContent="space-between">
+        <Text dimColor>{p.error ? p.error : p.at ? `Cập nhật ${dur((now - p.at) / 1000)} trước · tự làm mới mỗi 10 giây (cả Drive)` : 'Đang đọc trạng thái…'}</Text>
+        <Button key="lam-moi" label="Làm mới" onPress={() => { lastScrolled = ''; return refresh($) }} />
+      </Box>
+    </Box>
+  )
+}
+
+
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     await $.command.register({ name: 'vp', description: 'Mở ô văn phòng pixel: tiến độ, lỗi và việc chờ duyệt của các quy trình đang chạy' })
@@ -187,86 +289,23 @@ export const register: Register = on => {
   })
 
   on('command.run', { command: 'vp' }, async $ => {
-    await $.ui.open({ id: PANE, title: TITLE })
+    const opened: any = await $.ui.open({ id: PANE, title: TITLE })
     lastScrolled = ''
-    void refresh($)
-    return { text: 'Đã mở ô Văn phòng.' }
+    await refresh($)
+    let where = 'Đã mở ô Văn phòng.'
+    if (!opened?.isPlaced) {
+      // cloud sessions viewed in the app place no panes: draw the office as a row in the conversation instead
+      try { await $.ui.place({ id: ROW }); where = 'Phiên này không có ô bên cạnh: văn phòng được đặt ngay trong khung chat.' } catch { where = 'Phiên này không hiện được ô; xem tóm tắt dưới đây.' }
+    }
+    return { text: where + '\n' + summary((await read($, films)) ?? [], Date.now()) }
   })
 
-  on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
-    const els: any = $.ui.resolve(e)
-    const { Box, Text, Button } = els
-    const Svg = els.Svg
-    const list = (await read($, films)) ?? []
-    const p = (await read($, poll)) ?? { at: 0, error: '' }
-    const want = (await read($, focus)) ?? ''
-    const now = Date.now()
-    const cols = ((e.props as any).bodyColumns ?? 56) as number
-    const px = Math.round(Math.max(220, Math.min(720, cols * 8.6)))
-    const active = list.filter(f => !isDone(f)), finished = list.filter(isDone)
-    const shown = list.find(f => f.slug === want) ?? active[0] ?? list[0]
-    const errs = list.filter(f => f.blocked).length, waits = list.filter(f => f.approval && !f.blocked).length
-    const sceneState = shown ? view(shown, now).scene : { active: null, doneRoles: [] }
-    // progress is animated inside the SVG (HP bars run at the real rate), so only visible state changes redraw it
-    const key = JSON.stringify({ ...sceneState, progress: undefined, rate: undefined, handoffAge: undefined, px })
-    if (key !== sceneKey) {
-      sceneKey = key
-      sceneSvg = officeSvg(ASSETS, sceneState).full(px)
-      if (sceneSvg.length > SVG_LIMIT) sceneSvg = officeSvg(ASSETS, { ...sceneState, lite: true }).full(px)
-    }
-    if (!shownSvg) shownSvg = sceneSvg
-    else if (sceneSvg !== shownSvg && !swapping) {
-      swapping = true; overlaySvg = shownSvg; const next = sceneSvg
-      const redraw = () => update($, poll, (q: Poll) => ({ ...(q ?? { at: 0, error: '' }) }))
-      $.clock.after(900, async () => { shownSvg = next; await redraw()
-        $.clock.after(1600, async () => { overlaySvg = ''; swapping = false; await redraw() }) })
-    }
-
-    const kindOf = (f: Film) => (f.blocked ? 'err' : f.approval ? 'wait' : isDone(f) ? 'done' : now - f.updated > STALE_MS ? 'stale' : 'run') as 'err' | 'wait' | 'done' | 'stale' | 'run'
-    const KIND_T = { err: 'Lỗi', wait: 'Chờ duyệt', done: 'Xong', stale: 'Im lặng', run: 'Đang làm' }
-    const W = Math.max(240, px)
-    const card = (f: Film) => {
-      const v = view(f, now), kind = kindOf(f), focused = f.slug === shown?.slug
-      const group = GROUP_VI[f.group ?? f.skill ?? ''] ?? f.group ?? f.skill ?? ''
-      const etaText = v.allDone ? 'đã xong' : v.remaining == null ? 'chưa đủ dữ liệu để ước lượng' : `còn ~${dur(v.remaining)} · xong ~${clock(now + v.remaining * 1000)}`
-      const steps: CardStep[] = v.steps.map(s => ({
-        label: s.label, role: s.role, state: s.state, w: s.took ?? s.est ?? s.guess ?? s.left ?? 1,
-        took: s.took ? dur(s.took) : undefined, elapsed: s.elapsed ? dur(s.elapsed) : undefined,
-        left: s.left != null ? `~${dur(s.left)}` : undefined, guess: s.guess != null ? dur(s.guess) : undefined,
-      }))
-      const stale = kind === 'stale' ? `Không cập nhật ${dur((now - f.updated) / 1000)}: có thể đã dừng.` : ''
-      const message = f.blocked || f.approval ? (f.message || (f.blocked ? 'Công việc báo bị vướng.' : 'Công việc chờ bạn trả lời.')) : stale
-      const reply = f.blocked || f.approval ? (f.source === 'drive' ? 'Trả lời trong phiên cloud của việc này.' : 'Trả lời trong phiên đang chạy việc này.') : stale ? 'Mở phiên đang chạy việc này để kiểm tra.' : ''
-      const svg = cardSvg({ title: f.title || f.slug, group, status: { t: KIND_T[kind], kind }, total: v.total, etaText, steps, progress: v.progress, message, reply, updatedText: `${dur((now - f.updated) / 1000)} trước`, focused }, W)
-      return (
-        <Box key={v.allDone ? `job-${f.slug}` : `cur-${f.slug}`} flexDirection="column">
-          {Svg ? <Svg source={svg} alt={`${f.title || f.slug}: ${KIND_T[kind]}, tổng ${Math.round(v.total * 100)}%, ${etaText}`} /> : <Text>{f.title || f.slug} · {KIND_T[kind]} · {Math.round(v.total * 100)}% · {etaText}</Text>}
-          {!focused ? <Box flexDirection="row" justifyContent="flex-end"><Button key={'xem-' + f.slug} label="Xem trong văn phòng" onPress={() => update($, focus, () => f.slug)} /></Box> : null}
-        </Box>
-      )
-    }
-    return (
-      <Box flexDirection="column" gap={1}>
-        {Svg ? <Svg source={headerSvg(W, active.length, waits, errs, finished.length)} alt={`Văn phòng: ${active.length} đang chạy, ${waits} chờ duyệt, ${errs} lỗi`} /> : <Text bold>Văn phòng · chủ tịch</Text>}
-        {Svg ? (
-          <Box key="office" position="relative" flexDirection="column">
-            <Svg source={shownSvg} alt={shown ? `Văn phòng: ${shown.title || shown.slug}` : 'Văn phòng đang chờ việc'} width={px} height={px} isInteractive />
-            {overlaySvg ? <Box key="office-old" position="absolute" top={0} left={0}><Svg source={overlaySvg} alt="" width={px} height={px} isInteractive /></Box> : null}
-          </Box>
-        ) : null}
-        {list.length === 0 ? <Text dimColor>Chưa có việc nào. Ghi trạng thái bằng office-status (xem README) hoặc gửi việc từ repo video.</Text> : null}
-        {active.map(card)}
-        {finished.length > 0 && Svg ? <Svg source={doneShelfSvg(W, finished.slice(0, 6).map(f => ({ title: f.title || f.slug, when: clock(f.updated) })))} alt={`Đã xong ${finished.length} việc`} /> : null}
-        {finished.length > 0 ? (
-          <Box flexDirection="row" gap={1} flexWrap="wrap">
-            {finished.slice(0, 6).map(f => <Button key={'xem-' + f.slug} label={`Xem ${[...(f.title || f.slug)].slice(0, 14).join('')}`} onPress={() => update($, focus, () => f.slug)} />)}
-          </Box>
-        ) : null}
-        <Box flexDirection="row" justifyContent="space-between">
-          <Text dimColor>{p.error ? p.error : p.at ? `Cập nhật ${dur((now - p.at) / 1000)} trước · tự làm mới mỗi 10 giây` : 'Đang đọc trạng thái…'}</Text>
-          <Button key="lam-moi" label="Làm mới" onPress={() => { lastScrolled = ''; return refresh($) }} />
-        </Box>
-      </Box>
-    )
+  // the transcript row placed by /vp (same drawing as the pane)
+  on('ui.render', { component: 'Placed' }, async ($, e, next) => {
+    const p: any = e.props
+    if (p?.plugin !== 'van-phong-pixel' || p?.id !== ROW) return next(e)
+    return drawOffice($, e)
   })
+
+  on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => drawOffice($, e))
 }
