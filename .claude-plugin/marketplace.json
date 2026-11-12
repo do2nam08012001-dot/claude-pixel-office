@@ -1,6 +1,8 @@
 {
-  "name": "van-phong",
-  "owner": { "name": "jp-studio" },
+  "name": "claude-pixel-office",
+  "owner": {
+    "name": "jp-studio"
+  },
   "plugins": [
     {
       "name": "van-phong-pixel",
