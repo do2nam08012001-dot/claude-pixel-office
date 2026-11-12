@@ -276,7 +276,8 @@ for (const [who, fr] of Object.entries(sprites)) {
 const props = {};
 for (const [k, v] of Object.entries(sprites)) if (v instanceof Pix) props[k] = toPaths(epx(v));
 const pats = PATS.map(({ id, tw, th, ox, oy, areas, p }) => ({ id, w: tw * 2, h: th * 2, x: ox * 2, y: oy * 2, areas: areas.map((a) => a.map((v) => v * 2)), svg: toPaths(epx(p, true)) }));
-const out = { bg: toPaths(epx(bg)), fg: toPaths(epx(fg)), pats, bands, chars, props };
+function nn2(p){const q=new Pix(p.w*2,p.h*2);for(let y=0;y<q.h;y++)for(let x=0;x<q.w;x++){const i=((y>>1)*p.w+(x>>1))*4,j=(y*q.w+x)*4;q.d[j]=p.d[i];q.d[j+1]=p.d[i+1];q.d[j+2]=p.d[i+2];q.d[j+3]=p.d[i+3]}return q}
+const out = { bg: toPaths(process.env.EPX ? epx(bg) : nn2(bg)), fg: toPaths(process.env.EPX ? epx(fg) : nn2(fg)), pats, bands, chars, props };
 fs.writeFileSync(new URL('./assets4.json', import.meta.url), JSON.stringify(out));
 const L = (o) => JSON.stringify(o).length;
 console.log('bg', out.bg.length, 'fg', out.fg.length, 'pats', L(pats), 'bands', L(bands), 'bandCount', Object.keys(bands).length, 'props', L(props));

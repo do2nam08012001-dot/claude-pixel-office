@@ -114,7 +114,7 @@ export function officeSvg(A, s = {}) {
     const c = S[who], once = o.once ? '1 forwards' : 'infinite';
     // keyframes are kept short: times to 0.1 %, and the step-end tracks (walk/stand, facing) only where they change
     const r1 = (t) => Math.round(t * 10) / 10;
-    const pos = pts.map(([t, x, y]) => `${r1(t)}%{transform:translate(${x}px,${y}px)}`).join('');
+    const pos = pts.map(([t, x, y]) => `${r1(t)}%{translate:${x}px ${y}px}`).join('');
     const mv = [], sv = [], fc = [];
     let lastMove = null, lastLeft = null;
     for (let i = 0; i < pts.length; i++) {
