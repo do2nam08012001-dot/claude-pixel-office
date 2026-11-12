@@ -160,3 +160,13 @@ export function doneShelfSvg(W: number, rows: { title: string; when: string }[])
   })
   return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" shape-rendering="crispEdges">${o}</svg>`
 }
+
+// footer strip in the same style: LED "live" and when the office last read the status
+export function footerSvg(W: number, text: string, isError: boolean) {
+  const H = 26
+  const o = R(0, 0, W, H, OUT) + R(1, 1, W - 2, H - 2, PANEL2) + R(1, 1, W - 2, 1, '#FFFFFF" opacity=".1')
+    + R(9, 10, 6, 6, isError ? COL.err.main : COL.done.main, ' class="led"')
+    + T(21, 17, isError ? 'LỖI' : 'TRỰC TIẾP', isError ? COL.err.main : COL.done.main, 10.5, ' font-weight="700"', MONO)
+    + T(isError ? 48 : 86, 17, fit(text, W - (isError ? 56 : 94), 11.5), SUB, 11.5)
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" shape-rendering="crispEdges"><style>.led{animation:led .9s steps(1) infinite}@keyframes led{50%{opacity:.25}}text{shape-rendering:auto}</style>${o}</svg>`
+}

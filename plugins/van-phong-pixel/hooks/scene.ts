@@ -201,8 +201,7 @@ export function officeSvg(A, s = {}) {
 
   let under = '', back = '', mid = '', front = '', walk = '', top = '';
   // ---------- ambient light ----------
-  under += [[42, 62, 0], [128, 62, 1.5], [214, 64, 3], [42, 196, 2], [128, 196, 4], [214, 196, 1]].map(([x, y, dl]) => `<ellipse cx="${x}" cy="${y}" rx="34" ry="14" fill="#FFF1C9" opacity=".1" class="pool" style="animation-delay:-${dl}s"/>`).join('')
-    + G(rect(140, 8, 2, 8, '#FFFFFF', '', .5) + rect(144, 8, 1, 8, '#FFFFFF', '', .35), 'class="glint"');
+  under += G(rect(140, 8, 2, 8, '#FFFFFF', '', .5) + rect(144, 8, 1, 8, '#FFFFFF', '', .35), 'class="glint"');
   // ---------- chairman ----------
   const bossMode = done ? 'wave' : st.approval || err ? 'worried' : 'idle';
   top += done ? emote('heart', 222, 60, 0, 3) : err ? emote('bang', 222, 60, 0, 2) : st.approval ? '' : emote('star', 222, 60, 2, 7);
@@ -346,7 +345,6 @@ export function officeSvg(A, s = {}) {
   if (night) {
     top += rect(0, 0, 256, 256, '#0A1430', '', .3) + rect(136, 6, 28, 23, '#0B1638', '', .85)
       + [[140, 9], [151, 13], [159, 8], [146, 21], [157, 24]].map(([x, y], i) => rect(x, y, 1, 1, '#FFF8C4', `twk w${i % 3}`)).join('') + rect(155, 10, 4, 4, '#FFF3B0') + rect(156, 10, 3, 3, '#0B1638', '', .85);
-    top += [[44, 100, 26], [127, 100, 26], [210, 98, 22], [130, 222, 24], [139, 48, 12]].map(([x, y, r]) => `<ellipse cx="${x}" cy="${y}" rx="${r}" ry="${r * .45}" fill="#FFE9A8" opacity=".16" class="lamp"/>`).join('');
   }
   if (wee && !err && !st.approval && !done) top += zz(232, 66);
   // the render passing 50 %: the office cheers once
@@ -375,7 +373,6 @@ export function officeSvg(A, s = {}) {
 .scan{animation:scan .7s steps(3) infinite}@keyframes scan{100%{transform:translateY(2px)}}
 .zz{animation:zz 2.6s steps(8) infinite;opacity:0}@keyframes zz{15%{opacity:1}100%{transform:translate(4px,-9px);opacity:0}}
 .sweat{animation:sw 1s steps(2) infinite}@keyframes sw{50%{transform:translateY(2px);opacity:.4}}
-.pool{animation:pool 7s ease-in-out infinite}@keyframes pool{50%{opacity:.17}}
 .glint{animation:glint 9s ease-in-out infinite}@keyframes glint{0%,100%{transform:none;opacity:0}20%{opacity:1}60%{transform:translateX(18px);opacity:0}}
 .dust{animation:dust 7s linear infinite}.d1{animation-delay:-2.3s}.d2{animation-delay:-4.6s}@keyframes dust{0%{transform:translate(0,0);opacity:0}20%{opacity:.8}100%{transform:translate(-8px,22px);opacity:0}}
 .conf{animation:conf 2.2s linear infinite}.k1{animation-delay:-.5s}.k2{animation-delay:-1.1s}.k3{animation-delay:-1.6s}@keyframes conf{0%{transform:translateY(-4px) rotate(0)}100%{transform:translateY(130px) rotate(180deg)}}

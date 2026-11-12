@@ -3,7 +3,7 @@ import type { Register } from 'claude-code'
 import type { Film, Owned, Poll, Role, Step } from '../types'
 import { ASSETS } from './assets'
 import { officeSvg, legacy } from './scene'
-import { cardSvg, headerSvg } from './cards'
+import { cardSvg, headerSvg, footerSvg } from './cards'
 import type { CardStep } from './cards'
 
 const PANE = 'van-phong'
@@ -451,11 +451,11 @@ async function drawOffice($: any, e: any) {
       <Box key={v.allDone ? `job-${f.slug}` : `cur-${f.slug}`} flexDirection="column">
         {Svg ? <Svg source={svg} alt={`${f.title || f.slug}: ${KIND_T[kind]}, tổng ${Math.round(v.total * 100)}%, ${etaText}`} /> : <Text>{f.title || f.slug} · {KIND_T[kind]} · {Math.round(v.total * 100)}% · {etaText}</Text>}
         <Box flexDirection="row" justifyContent="flex-end" gap={1}>
-          {f.approval && !f.blocked ? <Button key={'duyet-' + f.slug} variant="primary" label="Duyệt" onPress={() => $.prompt.submit({ text: `Duyệt ${f.slug} — chuyển nguyên lời "duyệt" sang phiên cloud của phim này.` })} /> : null}
-          {f.approval || f.blocked ? <Button key={'sua-' + f.slug} label={f.blocked ? 'Trả lời lỗi' : 'Yêu cầu sửa'} onPress={() => $.prompt.fill({ text: `${f.blocked ? 'Trả lời lỗi' : 'Yêu cầu sửa'} ${f.slug} (chuyển sang phiên cloud): ` })} /> : null}
-          {v.allDone && f.source === 'drive' ? <Button key={'tai-' + f.slug} variant="primary" label="Tải video về" onPress={() => $.prompt.submit({ text: `Tải video ${f.slug} về máy: chạy local/fetch.sh ${f.slug}, rồi báo đường dẫn thư mục ket-qua.` })} /> : null}
-          {!focused ? <Button key={'xem-' + f.slug} label="Xem trong văn phòng" onPress={() => update($, focus, () => f.slug)} /> : null}
-          <Button key={'huy-' + f.slug} label={kind === 'stale' || v.allDone ? 'Xóa khỏi văn phòng' : 'Hủy theo dõi'} onPress={() => drop($, f, kind === 'stale')} />
+          {f.approval && !f.blocked ? <Button key={'duyet-' + f.slug} variant="primary" label="✓ Duyệt" onPress={() => $.prompt.submit({ text: `Duyệt ${f.slug} — chuyển nguyên lời "duyệt" sang phiên cloud của phim này.` })} /> : null}
+          {f.approval || f.blocked ? <Button key={'sua-' + f.slug} label={f.blocked ? '✎ Trả lời lỗi' : '✎ Yêu cầu sửa'} onPress={() => $.prompt.fill({ text: `${f.blocked ? 'Trả lời lỗi' : 'Yêu cầu sửa'} ${f.slug} (chuyển sang phiên cloud): ` })} /> : null}
+          {v.allDone && f.source === 'drive' ? <Button key={'tai-' + f.slug} variant="primary" label="⬇ Tải video về" onPress={() => $.prompt.submit({ text: `Tải video ${f.slug} về máy: chạy local/fetch.sh ${f.slug}, rồi báo đường dẫn thư mục ket-qua.` })} /> : null}
+          {!focused ? <Button key={'xem-' + f.slug} label="👁 Xem trong văn phòng" onPress={() => update($, focus, () => f.slug)} /> : null}
+          <Button key={'huy-' + f.slug} label={kind === 'stale' || v.allDone ? '🗑 Xóa khỏi văn phòng' : '✕ Hủy theo dõi'} onPress={() => drop($, f, kind === 'stale')} />
         </Box>
       </Box>
     )
@@ -491,11 +491,11 @@ async function drawOffice($: any, e: any) {
           })}
         </Box>
       ) : null}
-      <Box flexDirection="row" justifyContent="space-between">
-        <Text dimColor>{p.error ? p.error : p.at ? `Cập nhật ${dur((now - p.at) / 1000)} trước · tự làm mới mỗi 5 giây` : 'Đang đọc trạng thái…'}</Text>
+      {Svg ? <Svg source={footerSvg(W, p.error ? p.error : p.at ? `cập nhật ${dur((now - p.at) / 1000)} trước · làm mới mỗi 5 giây` : 'đang đọc trạng thái…', !!p.error)} alt={p.error || 'Văn phòng đang cập nhật trực tiếp'} /> : <Text dimColor>{p.error || 'Đang cập nhật'}</Text>}
+      <Box flexDirection="row" justifyContent="flex-end">
         <Box flexDirection="row" gap={1}>
-          <Button key="am-thanh" label={(await read($, soundOn)) === false ? 'Âm thanh: tắt' : 'Âm thanh: bật'} onPress={async () => { const on = !((await read($, soundOn)) ?? true); await update($, soundOn, () => on); try { await $.store.set('sound', on) } catch { /* read-only */ } }} />
-          <Button key="lam-moi" label="Làm mới" onPress={() => { lastScrolled = ''; return refresh($) }} />
+          <Button key="am-thanh" label={(await read($, soundOn)) === false ? '🔇 Bật tiếng' : '🔊 Tắt tiếng'} onPress={async () => { const on = !((await read($, soundOn)) ?? true); await update($, soundOn, () => on); try { await $.store.set('sound', on) } catch { /* read-only */ } }} />
+          <Button key="lam-moi" label="⟳ Làm mới" onPress={() => { lastScrolled = ''; return refresh($) }} />
         </Box>
       </Box>
     </Box>
