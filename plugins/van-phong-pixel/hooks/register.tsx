@@ -3,7 +3,7 @@ import type { Register } from 'claude-code'
 import type { Film, Owned, Poll, Role, Step } from '../types'
 import { ASSETS } from './assets'
 import { officeSvg, legacy } from './scene'
-import { cardSvg, headerSvg, footerSvg, buttonSvg } from './cards'
+import { cardSvg, headerSvg, footerSvg } from './cards'
 import type { CardStep } from './cards'
 
 const PANE = 'van-phong'
@@ -446,15 +446,13 @@ async function drawOffice($: any, e: any) {
   const W = Math.max(240, px)
   // a pixel button: the face is drawn, a plain Button on top keeps it a real control (keyboard, presses, tests)
   const pixBtn = (key: string, label: string, onPress: () => any, tone: 'wood' | 'primary' | 'danger' = 'wood') => {
-    const w = Math.round([...label].reduce((a, ch) => a + ((ch.codePointAt(0) ?? 0) > 0x2000 ? 14 : 7.6), 0) + 28)
-    return Svg ? (
-      <Box key={key + '-box'} position="relative" width={w} height={30}>
-        <Svg source={buttonSvg(w, 30, tone)} alt={label} width={w} height={30} />
-        <Box position="absolute" top={0} left={0} width={w} height={30} justifyContent="center" alignItems="center">
-          <Button key={key} plain label={label} onPress={onPress} />
-        </Box>
+    // a wooden plate (box colour + dark border) around a plain Button: no picture on top of it, so nothing can drift
+    const bg = tone === 'primary' ? '#2E7D4F' : tone === 'danger' ? '#8E2F35' : '#7A4A2E'
+    return (
+      <Box key={key + '-box'} backgroundColor={bg} borderStyle="single" borderColor="#2A1E1E" paddingX={1}>
+        <Button key={key} plain label={label} onPress={onPress}><Text color="#FFF3D6" bold>{label}</Text></Button>
       </Box>
-    ) : <Button key={key} label={label} onPress={onPress} />
+    )
   }
   const card = (f: Film) => {
     const v = view(f, now), kind = kindOf(f), focused = f.slug === shown?.slug
