@@ -3,10 +3,14 @@ import fs from 'node:fs';
 import { Pix } from './pix.mjs';
 const W = 256, H = 256;
 const bg = new Pix(W, H), fg = new Pix(W, H);
+let TILE = null;
+// ---- pattern tiles (drawn at 1x, scaled 2x with EPX); x,y,w,h = the area they fill ----
+const PATS = [];
+function pat(id, tw, th, ox, oy, areas, draw) { const p = new Pix(tw, th); TILE = p; draw(p); TILE = null; PATS.push({ id, tw, th, ox, oy, areas, p }); }
 const metal = { top: '#9AA6B2', front: '#7F8C99', line: '#3C4651', hi: '#B9C3CD' };
 
 // ===== floors =====
-function planks(x0, y0, w, h) {
+function planks(x0, y0, w, h, bg = TILE) {
   for (let y = y0; y < y0 + h; y++) for (let x = x0; x < x0 + w; x++) {
     const ry = y - y0, row = Math.floor(ry / 7), seam = (x - x0 + row * 17) % 34 === 0;
     let c = ry % 7 === 0 ? '#93592F' : seam ? '#A2683A' : '#C1834F';
@@ -14,25 +18,29 @@ function planks(x0, y0, w, h) {
     bg.set(x, y, c);
   }
 }
-function tiles(x0, y0, w, h, a, b, g, s) {
+function tiles(x0, y0, w, h, a, b, g, s, bg = TILE) {
   for (let y = y0; y < y0 + h; y++) for (let x = x0; x < x0 + w; x++) {
     const gx = (x - x0) % s, gy = (y - y0) % s, chk = (Math.floor((x - x0) / s) + Math.floor((y - y0) / s)) % 2;
     bg.set(x, y, gx === 0 || gy === 0 ? g : chk ? a : b); if (gx === 1 || gy === 1) bg.set(x, y, '#FFFFFF22');
   }
 }
-planks(0, 44, W, 88);
+
 // corridor 128-158
-bg.rect(0, 128, W, 30, '#D7C9AE'); for (let x = 0; x < W; x += 16) bg.vline(x, 128, 30, '#C9BA9C');
-bg.rect(0, 133, W, 20, '#34436A'); bg.hline(0, 134, W, '#D1AE55'); bg.hline(0, 151, W, '#D1AE55'); bg.hline(0, 133, W, '#22304F'); bg.hline(0, 152, W, '#22304F');
-for (let x = 6; x < W; x += 14) { for (const [dx, dy] of [[0, 0], [-1, 1], [1, 1], [-2, 2], [2, 2], [-1, 3], [1, 3], [0, 4]]) bg.set(x + dx, 140 + dy, '#D1AE55'); bg.set(x, 142, '#E9CF86'); }
 // lower floors 168-256
-tiles(0, 156, 86, 100, '#6E7B88', '#67737F', '#4C5662', 12);
-tiles(88, 156, 82, 100, '#B3E3D2', '#A6DAC8', '#83BFAA', 10);
-for (let y = 156; y < H; y++) for (let x = 172; x < W; x++) bg.set(x, y, (y - 156) % 16 === 0 || (x - 172) % 28 === 0 ? '#A49987' : '#BDB2A2');
 for (let i = 0; i < 4; i++) { bg.rect(10 + i * 18, 240, 12, 6, '#4C5662'); for (let k = 0; k < 4; k++) bg.hline(11 + i * 18, 241 + k, 10, k % 2 ? '#3A434D' : '#5A6571'); } // floor vents
 
+pat('fw', 34, 14, 0, 44, [[0, 44, 256, 84]], (p) => planks(0, 0, 34, 14, p));
+pat('fc', 112, 30, 0, 128, [[0, 128, 256, 28]], (p) => {
+  p.rect(0, 0, 112, 30, '#D7C9AE'); for (let x = 0; x < 112; x += 16) p.vline(x, 0, 30, '#C9BA9C');
+  p.rect(0, 5, 112, 20, '#34436A'); p.hline(0, 6, 112, '#D1AE55'); p.hline(0, 23, 112, '#D1AE55'); p.hline(0, 5, 112, '#22304F'); p.hline(0, 24, 112, '#22304F');
+  for (let x = 6; x < 112; x += 14) { for (const [dx, dy] of [[0, 0], [-1, 1], [1, 1], [-2, 2], [2, 2], [-1, 3], [1, 3], [0, 4]]) p.set(x + dx, 12 + dy, '#D1AE55'); p.set(x, 14, '#E9CF86'); }
+});
+pat('fs', 24, 24, 0, 156, [[0, 156, 86, 100]], (p) => tiles(0, 0, 24, 24, '#6E7B88', '#67737F', '#4C5662', 12, p));
+pat('fq', 20, 20, 88, 156, [[88, 156, 82, 100]], (p) => tiles(0, 0, 20, 20, '#B3E3D2', '#A6DAC8', '#83BFAA', 10, p));
+pat('fd', 28, 16, 172, 156, [[172, 156, 84, 100]], (p) => { for (let y = 0; y < 16; y++) for (let x = 0; x < 28; x++) p.set(x, y, y === 0 || x === 0 ? '#A49987' : '#BDB2A2'); });
+pat('ww', 8, 34, 0, 0, [[0, 0, 256, 34]], (p) => { p.rect(0, 0, 8, 34, '#F1E9DC'); p.vline(0, 0, 34, '#E8DECD'); });
 // ===== back wall =====
-bg.rect(0, 0, W, 34, '#F1E9DC'); for (let x = 0; x < W; x += 8) bg.vline(x, 0, 34, '#E8DECD'); 
+ 
 bg.rect(0, 0, W, 2, '#D8CCB8'); bg.rect(0, 34, W, 9, '#B98A5C'); bg.hline(0, 34, W, '#D9AE80'); bg.hline(0, 35, W, '#C99A6C'); bg.rect(0, 41, W, 3, '#6E4A2C');
 for (let x = 0; x < W; x += 20) { bg.vline(x, 36, 5, '#9F7148'); bg.vline(x + 1, 36, 5, '#C99A6C'); }
 function windowAt(x, y, w, h) {
@@ -238,7 +246,37 @@ const cat = new Pix(18, 10); cat.map(0, 0, ['..............OO..', '.............
 
 export const LAYERS = { bg, fg };
 import { toPaths } from './vectorize.mjs';
-const V = (p) => toPaths(p);
-const sv = {}; for (const [k, v] of Object.entries(sprites)) sv[k] = v instanceof Pix ? V(v) : Object.fromEntries(Object.entries(v).map(([a, b]) => [a, V(b)]));
-fs.writeFileSync(new URL('./assets3.json', import.meta.url), JSON.stringify({ bg: V(bg), fg: V(fg), sprites: sv }));
-console.log('bg', V(bg).length, 'fg', V(fg).length, 'sprites', JSON.stringify(sv).length, 'oneFrame', sv.opus.normal.length);
+const px = (p, x, y, wrap) => { if (wrap) { x = (x + p.w) % p.w; y = (y + p.h) % p.h; } else { x = Math.max(0, Math.min(p.w - 1, x)); y = Math.max(0, Math.min(p.h - 1, y)); } const i = (y * p.w + x) * 4; return (p.d[i] << 24 | p.d[i + 1] << 16 | p.d[i + 2] << 8 | p.d[i + 3]) >>> 0; };
+function epx(p, wrap = false) {
+  const q = new Pix(p.w * 2, p.h * 2);
+  const put = (x, y, k) => { const i = (y * q.w + x) * 4; q.d[i] = k >>> 24; q.d[i + 1] = k >>> 16 & 255; q.d[i + 2] = k >>> 8 & 255; q.d[i + 3] = k & 255; };
+  for (let y = 0; y < p.h; y++) for (let x = 0; x < p.w; x++) {
+    const P = px(p, x, y, wrap), A = px(p, x, y - 1, wrap), B = px(p, x + 1, y, wrap), C = px(p, x - 1, y, wrap), D = px(p, x, y + 1, wrap);
+    let a = P, b = P, c = P, d = P;
+    if (C === A && C !== D && A !== B) a = A; if (A === B && A !== C && B !== D) b = B; if (D === C && D !== B && C !== A) c = C; if (B === D && B !== A && D !== C) d = D;
+    put(2 * x, 2 * y, a); put(2 * x + 1, 2 * y, b); put(2 * x, 2 * y + 1, c); put(2 * x + 1, 2 * y + 1, d);
+  }
+  return q;
+}
+const rows = (p, y0, y1) => { const q = new Pix(p.w, y1 - y0); q.d.set(p.d.subarray(y0 * p.w * 4, y1 * p.w * 4)); return q; };
+// characters: frames -> 2x -> head (rows 0-23) / torso (24-37) / legs (38-47) bands, deduplicated
+const USED = ['normal', 'blink', 'happy', 'worried', 'red1', 'red2', 'grab', 'walkA', 'walkB', 'wave1', 'wave2'];
+const bands = {}, bandId = new Map(), chars = {};
+const band = (svg) => { if (!bandId.has(svg)) { const id = 'b' + bandId.size.toString(36); bandId.set(svg, id); bands[id] = svg; } return bandId.get(svg); };
+for (const [who, fr] of Object.entries(sprites)) {
+  if (!(fr instanceof Pix) && fr.normal) {
+    chars[who] = {};
+    for (const name of USED) {
+      const q = epx(fr[name]);
+      const parts = [[0, 24], [24, 38], [38, 48]].map(([a, b]) => band(toPaths(rows(q, a, b), { dy: a })));
+      chars[who][name] = name === 'blink' ? [parts[0]] : parts;
+    }
+  }
+}
+const props = {};
+for (const [k, v] of Object.entries(sprites)) if (v instanceof Pix) props[k] = toPaths(epx(v));
+const pats = PATS.map(({ id, tw, th, ox, oy, areas, p }) => ({ id, w: tw * 2, h: th * 2, x: ox * 2, y: oy * 2, areas: areas.map((a) => a.map((v) => v * 2)), svg: toPaths(epx(p, true)) }));
+const out = { bg: toPaths(epx(bg)), fg: toPaths(epx(fg)), pats, bands, chars, props };
+fs.writeFileSync(new URL('./assets4.json', import.meta.url), JSON.stringify(out));
+const L = (o) => JSON.stringify(o).length;
+console.log('bg', out.bg.length, 'fg', out.fg.length, 'pats', L(pats), 'bands', L(bands), 'bandCount', Object.keys(bands).length, 'props', L(props));

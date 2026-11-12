@@ -71,8 +71,10 @@ The file format is in [plugins/van-phong-pixel/README.md](plugins/van-phong-pixe
 
 ## Editing the art
 
-The scene is pure SVG paths with CSS animation (no images, no script). Source in `art-source/`: change `build3.mjs`
-or `scene6.mjs`, run `node art-source/build3.mjs`, then put `assets3.json` into `plugins/van-phong-pixel/hooks/assets.ts`
-and `scene6.mjs` into `hooks/scene.ts`.
+The scene is SVG paths with CSS animation (no images, no script), drawn at 2x with EPX smoothing; floors and walls are
+repeating `<pattern>` tiles and characters are head/torso/legs pieces shared through `<use>`, so a whole scene stays under
+the pane's 131 072-character SVG limit. Source in `art-source/`: change `build4.mjs` (art) or `scene7.mjs` (behaviour),
+run `node art-source/build4.mjs`, then put `assets4.json` into `plugins/van-phong-pixel/hooks/assets.ts` and `scene7.mjs`
+into `hooks/scene.ts`.
 
 License: MIT.

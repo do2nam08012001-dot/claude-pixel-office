@@ -82,21 +82,6 @@ function view(f: Film, now: number): View {
   return { steps: sv, idx, allDone, progress, scene, total: allDone ? 1 : Math.min(0.99, total), remaining: known ? remaining : null, known }
 }
 
-// ---- small SVG progress bars (drawn by the desktop Svg element) ----
-function overallBar(v: View, blocked: boolean | undefined, w: number) {
-  const n = v.steps.length, weights = v.steps.map(s => s.took ?? s.est ?? s.guess ?? s.left ?? 1), sum = weights.reduce((a, b) => a + (b || 1), 0)
-  let x = 0, segs = ''
-  v.steps.forEach((s, i) => {
-    const sw = (weights[i] || 1) / sum * 100, gap = i < n - 1 ? 0.6 : 0
-    const base = `<rect x="${x}" y="0" width="${Math.max(0.5, sw - gap)}" height="6" rx="1.2" fill="#2B3647"/>`
-    const fill = s.state === 'done' ? `<rect x="${x}" y="0" width="${Math.max(0.5, sw - gap)}" height="6" rx="1.2" fill="#2E9E57"/>`
-      : s.state === 'now' ? `<rect x="${x}" y="0" width="${Math.max(0.6, (sw - gap) * Math.max(0.04, v.progress))}" height="6" rx="1.2" fill="${blocked ? '#E53935' : '#3B82F6'}" class="pulse"/>` : ''
-    segs += base + fill; x += sw
-  })
-  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 6" preserveAspectRatio="none" width="${w}" height="12"><style>.pulse{animation:p 1.4s ease-in-out infinite}@keyframes p{50%{opacity:.6}}</style>${segs}</svg>`
-}
-const miniBar = (f: number, w: number, color: string) => `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 4" preserveAspectRatio="none" width="${w}" height="6"><rect width="100" height="4" rx="2" fill="#2B3647"/><rect width="${Math.max(2, f * 100)}" height="4" rx="2" fill="${color}"><animate attributeName="opacity" values="1;.55;1" dur="1.4s" repeatCount="indefinite"/></rect></svg>`
-
 // Pull complete JSON objects out of concatenated text (rclone cat joins files; files may be pretty-printed).
 function objects(text: string): any[] {
   const out: any[] = []; let depth = 0, start = -1, inStr = false, esc = false
@@ -205,7 +190,7 @@ export const register: Register = on => {
     if (scene.length > SVG_LIMIT) scene = officeSvg(ASSETS, { ...sceneState, lite: true }).full(px)
 
     const kindOf = (f: Film) => (f.blocked ? 'err' : f.approval ? 'wait' : isDone(f) ? 'done' : now - f.updated > STALE_MS ? 'stale' : 'run') as 'err' | 'wait' | 'done' | 'stale' | 'run'
-    const KIND_T = { err: 'LỖI', wait: 'CHỜ DUYỆT', done: 'XONG', stale: 'IM LẶNG', run: 'ĐANG LÀM' }
+    const KIND_T = { err: 'Lỗi', wait: 'Chờ duyệt', done: 'Xong', stale: 'Im lặng', run: 'Đang làm' }
     const W = Math.max(240, px)
     const card = (f: Film) => {
       const v = view(f, now), kind = kindOf(f), focused = f.slug === shown?.slug
@@ -219,7 +204,7 @@ export const register: Register = on => {
       const stale = kind === 'stale' ? `Không cập nhật ${dur((now - f.updated) / 1000)}: có thể đã dừng.` : ''
       const message = f.blocked || f.approval ? (f.message || (f.blocked ? 'Công việc báo bị vướng.' : 'Công việc chờ bạn trả lời.')) : stale
       const reply = f.blocked || f.approval ? (f.source === 'drive' ? 'Trả lời trong phiên cloud của việc này.' : 'Trả lời trong phiên đang chạy việc này.') : stale ? 'Mở phiên đang chạy việc này để kiểm tra.' : ''
-      const svg = cardSvg({ title: f.title || f.slug, group, status: { t: KIND_T[kind], kind }, total: v.total, etaText, steps, progress: v.progress, message, reply, updatedText: `cập nhật ${dur((now - f.updated) / 1000)} trước`, focused }, W)
+      const svg = cardSvg({ title: f.title || f.slug, group, status: { t: KIND_T[kind], kind }, total: v.total, etaText, steps, progress: v.progress, message, reply, updatedText: `${dur((now - f.updated) / 1000)} trước`, focused }, W)
       return (
         <Box key={v.allDone ? `job-${f.slug}` : `cur-${f.slug}`} flexDirection="column">
           {Svg ? <Svg source={svg} alt={`${f.title || f.slug}: ${KIND_T[kind]}, tổng ${Math.round(v.total * 100)}%, ${etaText}`} /> : <Text>{f.title || f.slug} · {KIND_T[kind]} · {Math.round(v.total * 100)}% · {etaText}</Text>}

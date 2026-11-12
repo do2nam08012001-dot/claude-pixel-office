@@ -24,7 +24,15 @@ export function officeSvg(A, s = {}) {
   const L = { fetch: 'Kho', research: 'Tư liệu', plan: 'Kế hoạch', build: 'Sản xuất', check: 'Kiểm tra', deliver: 'Giao', ...(st0.labels || {}) };
   const cut = (t, n = 18) => { const a = [...String(t)]; return a.length > n ? a.slice(0, n - 1).join('') + '…' : a.join(''); };
   const done = at('done');
-  const S = A.sprites;
+  // sprites: frames reference shared bands; props are inline 2x art
+  const usedBands = new Set();
+  const half = (inner) => `<g transform="scale(.5)">${inner}</g>`;
+  const S = {};
+  for (const [who, frames] of Object.entries(A.chars)) {
+    S[who] = {};
+    for (const [name, ids] of Object.entries(frames)) Object.defineProperty(S[who], name, { get: () => { ids.forEach((id) => usedBands.add(id)); return half(ids.map((id) => `<use href="#${id}"/>`).join('')); } });
+  }
+  for (const [k, v] of Object.entries(A.props)) S[k] = half(v);
   const img = (h, x, y, w, hh, c = '') => `<g${x || y ? ` transform="translate(${x} ${y})"` : ''}${c ? ` class="${c}"` : ''}>${h}</g>`;
   const rect = (x, y, w, h, f, c = '', o) => `<rect x="${x}" y="${y}" width="${w}" height="${h}" fill="${f}"${o != null ? ` opacity="${o}"` : ''}${c ? ` class="${c}"` : ''}/>`;
   const G = (i, a = '') => `<g${a ? ' ' + a : ''}>${i}</g>`;
@@ -265,5 +273,8 @@ export function officeSvg(A, s = {}) {
 .catz{opacity:0;animation:catz 32s step-end infinite}@keyframes catz{0%{opacity:0}62%{opacity:1}}
 .cateat{opacity:0;animation:cate 32s step-end infinite}@keyframes cate{0%{opacity:0}18%{opacity:1}40%{opacity:0}}@keyframes showAt{to{opacity:1}}@keyframes hideAt{to{opacity:0}}` + pathCss;
   const open = (px) => `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" shape-rendering="crispEdges" width="${px}" height="${px}">`;
-  return { full: (px = 512) => open(px) + `<style>${css}</style>${A.bg}${under}${back}${mid}${A.fg}${front}${walk}${top}</svg>`, bg: (px = 512) => open(px) + A.bg + '</svg>', scene: (px = 512) => open(px) + `<style>${css}</style>${under}${back}${mid}${A.fg}${front}${walk}${top}</svg>` };
+  const defs = () => '<defs>' + A.pats.map((p) => `<pattern id="${p.id}" x="${p.x}" y="${p.y}" width="${p.w}" height="${p.h}" patternUnits="userSpaceOnUse">${p.svg}</pattern>`).join('')
+    + [...usedBands].map((id) => `<g id="${id}">${A.bands[id]}</g>`).join('') + '</defs>';
+  const floors = () => half(A.pats.map((p) => p.areas.map(([x, y, w, h]) => `<rect x="${x}" y="${y}" width="${w}" height="${h}" fill="url(#${p.id})"/>`).join('')).join('') + A.bg);
+  return { full: (px = 512) => open(px) + defs() + `<style>${css}</style>${floors()}${under}${back}${mid}${half(A.fg)}${front}${walk}${top}</svg>` };
 }
