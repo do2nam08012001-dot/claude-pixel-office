@@ -8,6 +8,7 @@ const PANE = {
 const now = Date.now()
 const sony = { slug: 'sony', skill: 'jp-explainer-video', title: 'Sony', stage: 'plan', updated: now - 3 * 3600_000, history: { inputs: { start: now - 4 * 3600_000, end: now - 4 * 3600_000 + 56_000 } } }
 const fin = { slug: 'done', skill: 'jp-history-video', title: 'Xong rồi', stage: 'done', updated: now, history: {} }
+const appr = { slug: 'appr', skill: 'jp-history-video', title: 'Chờ duyệt', stage: 'plan', approval: true, message: 'Duyệt storyboard', updated: now, history: { plan: { start: now - 60_000 } } }
 const demo = { slug: 'demo-run', skill: 'jp-history-video', title: 'Demo chạy', stage: 'research', updated: now, history: {} }
 
 function engine(on: any, calls: string[][]) {
@@ -24,7 +25,7 @@ function engine(on: any, calls: string[][]) {
     calls.push(e.argv ?? e.command ?? e)
     const argv = (e.argv ?? []) as string[]
     if (argv[0] === 'sh') return { value: { exitCode: 0, stdout: String(argv[4] ?? '').startsWith('/home/user') ? 'cloud' : '', stderr: '' } }
-    if (argv[1] === 'cat') return { value: { exitCode: 0, stdout: JSON.stringify(sony) + JSON.stringify(demo) + JSON.stringify(fin), stderr: '' } }
+    if (argv[1] === 'cat') return { value: { exitCode: 0, stdout: JSON.stringify(sony) + JSON.stringify(demo) + JSON.stringify(fin) + JSON.stringify(appr), stderr: '' } }
     return { value: { exitCode: 0, stdout: '', stderr: '' } }
   })
   on('tool.call', () => ({ result: {} }))
@@ -66,4 +67,18 @@ test('in a cloud film session, tool calls are reported live', async ($, on) => {
   const live = calls.find(a => a.includes('live'))
   expect(live).toBeTruthy()
   expect(live![3]).toBe('Kiểm tra layout')
+})
+
+test('approval: the Duyệt button sends the reply', async ($, on) => {
+  const calls: string[][] = [], prompts: string[] = []
+  engine(on, calls)
+  on('prompt.submit', (_: any, e: any) => { prompts.push(e.text); return { text: e.text } })
+  on('ui.notify', () => ({ value: { isSent: true, channel: 'test' } }))
+  await $.session.start({ cwd: 'D:/x/repo-jp-history-video', surface: 'desktop', isInteractive: true })
+  await $.tool.call({ tool: 'Bash', command: 'bash local/send.sh appr --title "Chờ duyệt"' })
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  await ui.press({ key: 'lam-moi' })
+  await ui.press({ key: 'duyet-appr' })
+  expect(prompts.some(p => p.includes('Duyệt appr'))).toBe(true)
+  await ui.unmount()
 })

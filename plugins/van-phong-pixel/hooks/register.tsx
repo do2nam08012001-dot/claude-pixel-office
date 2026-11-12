@@ -25,6 +25,10 @@ const owned = atom({ plugin: 'van-phong-pixel', key: 'owned' } as const, [] as O
 const others = atom({ plugin: 'van-phong-pixel', key: 'others' } as const, [] as Film[], { shape: 'films-3' })
 let busy = false, again = false, cwdSkill: string | undefined
 const finish = new Map<string, number>()   // slug -> finish time shown (ms)
+const paneOpen = atom({ plugin: 'van-phong-pixel', key: 'paneOpen' } as const, false)
+// learned stage durations (seconds, median of the last films) per "skill:stage"; seeds the estimates of new films
+let learned: Record<string, number> = {}
+const LEARN = 'learned-v1'
 // cloud film session: repo root (has cloud/drive.sh) when this session runs in the cloud; live reports are throttled
 let cloudRoot = '', liveAct = '', liveTodos = '', liveDirty = false, livePushing = false, liveLast = 0
 const openOthers = atom({ plugin: 'van-phong-pixel', key: 'openOthers' } as const, false)
@@ -66,7 +70,7 @@ function view(f: Film, now: number): View {
     const active = idx >= 0 && idx < steps.length ? steps[idx].role : null
     scene = { active, progress, doneRoles: steps.slice(0, Math.max(0, idx)).map(s => s.role).filter(r => r !== active), allDone, blocked: f.blocked, approval: f.approval, labels }
   } else {
-    steps = VIDEO_STEPS
+    steps = VIDEO_STEPS.map(s => ({ ...s, est: learned[`${f.skill}:${s.id}`] ?? s.est }))
     const map: Record<string, number> = { idle: -1, inputs: 0, research: 1, plan: 2, render: 3, qa: 4, deliver: 5, done: 6 }
     idx = map[f.stage ?? 'idle'] ?? -1; allDone = f.stage === 'done'
     // share of the current stage: render %, the cloud's notes (research / plan), upload % (inputs)
@@ -238,6 +242,7 @@ async function refreshInner($: any) {
     const cap = Math.max(120_000, 0.1 * Math.max(0, cur - nowT))
     finish.set(f.slug, cur + Math.max(-cap, Math.min(cap, target - cur)))
   }
+  await learn($, list)
   // finished jobs leave on their own; other sessions' finished jobs are not shown at all
   const gone = list.filter(f => isDone(f) && Date.now() - f.updated > DONE_KEEP).map(f => f.slug)
   if (gone.length) await update($, owned, (o: Owned[]) => (o ?? []).filter(x => !gone.includes(x.slug)))
@@ -259,6 +264,7 @@ async function refreshInner($: any) {
         : now === 'wait' ? `Chờ duyệt · ${f.title || f.slug}: ${f.message || 'cần bạn trả lời'} — trả lời ngay trong phiên này`
         : `Xong · ${f.title || f.slug} — gõ "lấy video" để tải về máy`
       try { $.ui.toast(msg) } catch { /* no surface */ }
+      void $.ui.notify(msg, { title: 'Văn phòng' }).catch(() => { /* notifications off */ })
     }
     flags.set(f.slug, now)
   }
@@ -342,6 +348,23 @@ async function pump($: any) {
   } catch { /* offline: the next call tries again */ } finally { livePushing = false }
 }
 
+async function learn($: any, list: Film[]) {
+  let db: { d: Record<string, number[]>; seen: string[] } = { d: {}, seen: [] }
+  try { db = ((await $.store.get(LEARN)) as typeof db) ?? db } catch { /* first run */ }
+  let changed = false
+  for (const f of list) for (const [stage, h] of Object.entries(f.history ?? {})) {
+    if (!h?.start || !h.end || !f.skill) continue
+    const id = `${f.slug}:${stage}`
+    if (db.seen.includes(id)) continue
+    const k = `${f.skill}:${stage}`, s = (h.end - h.start) / 1000
+    if (s > 5) { db.d[k] = [...(db.d[k] ?? []), s].slice(-8); changed = true }
+    db.seen = [...db.seen, id].slice(-400)
+  }
+  if (changed) { try { await $.store.set(LEARN, db) } catch { /* read-only */ } }
+  const med = (a: number[]) => { const b = [...a].sort((x, y) => x - y); return b[Math.floor(b.length / 2)] }
+  learned = Object.fromEntries(Object.entries(db.d).filter(([, v]) => v.length).map(([k, v]) => [k, med(v)]))
+}
+
 // the office drawing: shared by the side pane and the transcript row (cloud sessions place no panes)
 async function drawOffice($: any, e: any) {
   const els: any = $.ui.resolve(e)
@@ -398,6 +421,9 @@ async function drawOffice($: any, e: any) {
       <Box key={v.allDone ? `job-${f.slug}` : `cur-${f.slug}`} flexDirection="column">
         {Svg ? <Svg source={svg} alt={`${f.title || f.slug}: ${KIND_T[kind]}, tổng ${Math.round(v.total * 100)}%, ${etaText}`} /> : <Text>{f.title || f.slug} · {KIND_T[kind]} · {Math.round(v.total * 100)}% · {etaText}</Text>}
         <Box flexDirection="row" justifyContent="flex-end" gap={1}>
+          {f.approval && !f.blocked ? <Button key={'duyet-' + f.slug} variant="primary" label="Duyệt" onPress={() => $.prompt.submit({ text: `Duyệt ${f.slug} — chuyển nguyên lời "duyệt" sang phiên cloud của phim này.` })} /> : null}
+          {f.approval || f.blocked ? <Button key={'sua-' + f.slug} label={f.blocked ? 'Trả lời lỗi' : 'Yêu cầu sửa'} onPress={() => $.prompt.fill({ text: `${f.blocked ? 'Trả lời lỗi' : 'Yêu cầu sửa'} ${f.slug} (chuyển sang phiên cloud): ` })} /> : null}
+          {v.allDone && f.source === 'drive' ? <Button key={'tai-' + f.slug} variant="primary" label="Tải video về" onPress={() => $.prompt.submit({ text: `Tải video ${f.slug} về máy: chạy local/fetch.sh ${f.slug}, rồi báo đường dẫn thư mục ket-qua.` })} /> : null}
           {!focused ? <Button key={'xem-' + f.slug} label="Xem trong văn phòng" onPress={() => update($, focus, () => f.slug)} /> : null}
           <Button key={'huy-' + f.slug} label={kind === 'stale' || v.allDone ? 'Xóa khỏi văn phòng' : 'Hủy theo dõi'} onPress={() => drop($, f, kind === 'stale')} />
         </Box>
@@ -456,7 +482,7 @@ export const register: Register = on => {
       } catch { /* Windows / no sh: not a cloud session */ }
     }
     await $.command.register({ name: 'vp', description: 'Mở ô văn phòng pixel: tiến độ, lỗi và việc chờ duyệt của các quy trình đang chạy' })
-    void $.ui.open({ id: PANE, title: TITLE })
+    void $.ui.open({ id: PANE, title: TITLE }).then((o: any) => update($, paneOpen, () => !!o?.isPlaced)).catch(() => {})
     void refresh($)
     $.clock.every(POLL_MS, () => { void refresh($) })
     return next(e)
@@ -464,6 +490,7 @@ export const register: Register = on => {
 
   on('command.run', { command: 'vp' }, async $ => {
     const opened: any = await $.ui.open({ id: PANE, title: TITLE })
+    await update($, paneOpen, () => !!opened?.isPlaced)
     lastScrolled = ''
     await refresh($)
     let where = 'Đã mở ô Văn phòng.'
@@ -482,6 +509,31 @@ export const register: Register = on => {
   })
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => drawOffice($, e))
+
+  on('ui.close', async ($, e, next) => {
+    if ((e as any).id === PANE) await update($, paneOpen, () => false)
+    return next(e)
+  })
+
+  // one line above the prompt while the office pane is closed: the film, %, time left, what the cloud is doing
+  on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
+    if ((e.props as any)?.hasSurvey || (await read($, paneOpen))) return next(e)
+    const act = ((await read($, films)) ?? []).filter(f => !isDone(f))
+    if (!act.length) return next(e)
+    const { Box, Text, Button } = $.ui.resolve(e)
+    const f = act[0], now = Date.now(), v = view(f, now)
+    const flag = f.blocked ? 'LỖI · ' : f.approval ? 'CHỜ DUYỆT · ' : ''
+    const eta = v.remaining != null ? ` · còn ~${dur(v.remaining)}` : ''
+    const td = (f as any).todo as { current?: string } | undefined
+    const doing = td?.current || f.message || ''
+    const name = [...(f.title || f.slug)].slice(0, 24).join('')
+    return (
+      <Box flexDirection="row" gap={1} justifyContent="space-between">
+        <Text>{flag}{name} · {Math.round(v.total * 100)}%{eta}{doing ? <Text dimColor> · {[...doing].slice(0, 40).join('')}</Text> : null}{act.length > 1 ? <Text dimColor> · +{act.length - 1} việc</Text> : null}</Text>
+        <Button key="vp-mo" label="Mở văn phòng" onPress={async () => { const o: any = await $.ui.open({ id: PANE, title: TITLE }); await update($, paneOpen, () => !!o?.isPlaced) }} />
+      </Box>
+    )
+  })
 
   // follow jobs this session sends (before the upload starts, so the office shows it at once)
   on('tool.call', { tool: 'Bash' }, async ($, e, next) => {

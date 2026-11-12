@@ -260,12 +260,6 @@ export function officeSvg(A, s = {}) {
 .tick{animation:tick 6s steps(6) infinite;transform-origin:76.5px 15.5px}@keyframes tick{100%{transform:rotate(360deg)}}
 .stand{opacity:0}
 .workglow{animation:wg 2.4s ease-in-out infinite}@keyframes wg{50%{opacity:.11}}
-.rise{animation:rise 1.6s linear infinite}.r1{animation-delay:.4s}.r2{animation-delay:.8s}.r3{animation-delay:1.2s}@keyframes rise{0%{transform:translateY(0);opacity:0}15%{opacity:1}100%{transform:translateY(-14px);opacity:0}}
-.spin{animation:spin 1.2s steps(4) infinite}@keyframes spin{100%{transform:rotate(90deg)}}
-.tap{animation:tap .5s steps(1) infinite}.t1{animation-delay:.17s}.t2{animation-delay:.33s}@keyframes tap{0%{opacity:1}30%{opacity:0}}
-.heat{animation:rise 1.2s linear infinite}.h1{animation-delay:.4s}.h2{animation-delay:.8s}
-.chk{animation:chk 5s steps(1) infinite}.c1{animation-delay:.8s}.c2{animation-delay:1.6s}.c3{animation-delay:2.4s}.c4{animation-delay:3.2s}@keyframes chk{0%{opacity:0}15%,90%{opacity:1}}
-.stand{opacity:0}
 .q{animation-duration:.18s}
 .bobq{animation:bob .2s steps(1) infinite}
 .cyc-a{animation:cyca 4s step-end infinite}.cyc-b{opacity:0;animation:cycb 4s step-end infinite}
@@ -294,5 +288,5 @@ export function officeSvg(A, s = {}) {
   const defs = () => '<defs>' + A.pats.map((p) => `<pattern id="${p.id}" x="${p.x}" y="${p.y}" width="${p.w}" height="${p.h}" patternUnits="userSpaceOnUse">${p.svg}</pattern>`).join('')
     + [...usedBands].map((id) => `<g id="${id}">${A.bands[id]}</g>`).join('') + '</defs>';
   const floors = () => half(A.pats.map((p) => p.areas.map(([x, y, w, h]) => `<rect x="${x}" y="${y}" width="${w}" height="${h}" fill="url(#${p.id})"/>`).join('')).join('') + A.bg);
-  return { full: (px = 512) => open(px) + defs() + `<style>${css}</style>${floors()}${under}${back}${mid}${half(A.fg)}${front}${walk}${top}</svg>` };
+  return { full: (px = 512) => open(px) + defs() + `<style>${css.replace(/\n/g, '')}</style>${floors()}${under}${back}${mid}${half(A.fg)}${front}${walk}${top}</svg>` };
 }
