@@ -25,6 +25,10 @@ const owned = atom({ plugin: 'van-phong-pixel', key: 'owned' } as const, [] as O
 const others = atom({ plugin: 'van-phong-pixel', key: 'others' } as const, [] as Film[], { shape: 'films-3' })
 let busy = false, again = false, cwdSkill: string | undefined, skills: string[] = [], scanOk = 0, ownKey = ''
 const finish = new Map<string, number>()   // slug -> finish time shown (ms)
+const soundOn = atom({ plugin: 'van-phong-pixel', key: 'soundOn' } as const, true)
+async function sound($: any, name: 'ting' | 'chime') {
+  try { if ((await read($, soundOn)) === false) return; await $.audio.play({ asset: `sounds/${name}.wav` }) } catch { /* no player on this surface */ }
+}
 const paneOpen = atom({ plugin: 'van-phong-pixel', key: 'paneOpen' } as const, false)
 // learned stage durations (seconds, median of the last films) per "skill:stage"; seeds the estimates of new films
 let learned: Record<string, number> = {}
@@ -273,7 +277,7 @@ async function refreshInner($: any) {
     const v = view(f, nowMs), cur = v.idx >= 0 && v.idx < v.steps.length ? v.steps[v.idx] : null, key = cur ? cur.id : v.allDone ? 'done' : 'idle'
     const prev = seen.get(f.slug)
     if (!prev) seen.set(f.slug, { step: key, at: 0 })
-    else if (prev.step !== key) seen.set(f.slug, cur && v.idx > 0 ? { step: key, from: v.steps[v.idx - 1].role, to: cur.role, at: nowMs } : { step: key, at: 0 })
+    else if (prev.step !== key) { seen.set(f.slug, cur && v.idx > 0 ? { step: key, from: v.steps[v.idx - 1].role, to: cur.role, at: nowMs } : { step: key, at: 0 }); void sound($, 'ting') }
   }
   // tell the chairman at once when something needs them or a job is done
   for (const f of list) {
@@ -283,6 +287,7 @@ async function refreshInner($: any) {
         : now === 'wait' ? `Chờ duyệt · ${f.title || f.slug}: ${f.message || 'cần bạn trả lời'} — trả lời ngay trong phiên này`
         : `Xong · ${f.title || f.slug} — gõ "lấy video" để tải về máy`
       try { $.ui.toast(msg) } catch { /* no surface */ }
+      void sound($, 'chime')
       void $.ui.notify(msg, { title: 'Văn phòng' }).catch(() => { /* notifications off */ })
     }
     flags.set(f.slug, now)
@@ -403,10 +408,10 @@ async function drawOffice($: any, e: any) {
   const active = list.filter(f => !isDone(f)), finished = list.filter(isDone)
   const shown = list.find(f => f.slug === want) ?? active[0] ?? list[0]
   const errs = list.filter(f => f.blocked).length, waits = list.filter(f => f.approval && !f.blocked).length
-  const sceneState = shown ? view(shown, now).scene : { active: null, doneRoles: [] }
+  const sceneState = { ...(shown ? view(shown, now).scene : { active: null, doneRoles: [] }), now, hour: new Date(now).getHours() }
   // progress is animated inside the SVG (HP bars run at the real rate), so only visible state changes redraw it
   // the HP bar is redrawn every 5 % (it animates smoothly in between), other visible changes redraw at once
-  const key = JSON.stringify({ ...sceneState, progress: Math.round((sceneState.progress ?? 0) * 20), rate: undefined, handoffAge: undefined, px })
+  const key = JSON.stringify({ ...sceneState, now: undefined, progress: Math.round((sceneState.progress ?? 0) * 20), rate: undefined, handoffAge: undefined, px })
   if (key !== sceneKey) {
     sceneKey = key
     sceneSvg = officeSvg(ASSETS, sceneState).layer(px)
@@ -490,7 +495,10 @@ async function drawOffice($: any, e: any) {
       ) : null}
       <Box flexDirection="row" justifyContent="space-between">
         <Text dimColor>{p.error ? p.error : p.at ? `Cập nhật ${dur((now - p.at) / 1000)} trước · tự làm mới mỗi 5 giây` : 'Đang đọc trạng thái…'}</Text>
-        <Button key="lam-moi" label="Làm mới" onPress={() => { lastScrolled = ''; return refresh($) }} />
+        <Box flexDirection="row" gap={1}>
+          <Button key="am-thanh" label={(await read($, soundOn)) === false ? 'Âm thanh: tắt' : 'Âm thanh: bật'} onPress={async () => { const on = !((await read($, soundOn)) ?? true); await update($, soundOn, () => on); try { await $.store.set('sound', on) } catch { /* read-only */ } }} />
+          <Button key="lam-moi" label="Làm mới" onPress={() => { lastScrolled = ''; return refresh($) }} />
+        </Box>
       </Box>
     </Box>
   )
@@ -500,6 +508,7 @@ async function drawOffice($: any, e: any) {
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     const cwd = String((e as any).cwd ?? '')
+    try { const sv = await $.store.get('sound'); if (sv === false) await update($, soundOn, () => false) } catch { /* default on */ }
     ownKey = `owned:${String((e as any).session_id ?? (e as any).sessionId ?? cwd)}`
     try {
       const saved = (await $.store.get(ownKey)) as Owned[] | undefined
