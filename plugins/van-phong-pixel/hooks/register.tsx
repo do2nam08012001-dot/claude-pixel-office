@@ -66,7 +66,9 @@ function view(f: Film, now: number): View {
     steps = VIDEO_STEPS
     const map: Record<string, number> = { idle: -1, inputs: 0, research: 1, plan: 2, render: 3, qa: 4, deliver: 5, done: 6 }
     idx = map[f.stage ?? 'idle'] ?? -1; allDone = f.stage === 'done'
-    progress = f.stage === 'render' ? f.render ?? 0 : Math.max(0, Math.min(1, f.progress ?? 0))   // inputs: upload %
+    // share of the current stage: render %, the cloud's notes (research / plan), upload % (inputs)
+    const pk = f.stage === 'render' ? f.render : f.stage === 'plan' ? f.plan : f.stage === 'research' ? f.research : f.progress
+    progress = Math.max(0, Math.min(1, pk ?? 0))
     scene = legacy(f)
   }
   const h = f.history ?? {}
@@ -312,11 +314,13 @@ async function drawOffice($: any, e: any) {
     const steps: CardStep[] = v.steps.map(s => ({
       label: s.label, role: s.role, state: s.state, w: s.w,
       took: s.took ? dur(s.took) : undefined, elapsed: s.elapsed ? dur(s.elapsed) : undefined,
-      left: s.left != null ? `~${dur(s.left)}` : undefined, guess: s.guess != null ? dur(s.guess) : undefined,
+      left: s.state === 'now' && !v.progress && s.est && (s.elapsed ?? 0) > s.est ? `quá dự kiến ${dur((s.elapsed ?? 0) - s.est)}` : s.left != null ? `~${dur(s.left)}` : undefined, guess: s.guess != null ? dur(s.guess) : undefined,
     }))
     const stale = kind === 'stale' ? `Không cập nhật ${dur((now - f.updated) / 1000)}: có thể đã dừng.` : ''
-    const message = f.blocked || f.approval ? (f.message || (f.blocked ? 'Công việc báo bị vướng.' : 'Công việc chờ bạn trả lời.')) : stale
-    const reply = f.blocked || f.approval ? (f.source === 'drive' ? 'Trả lời ngay trong phiên gốc này — Claude chuyển sang phiên cloud.' : 'Trả lời trong phiên đang chạy việc này.') : stale ? 'Hỏi Claude ở phiên gốc kiểm tra phiên cloud.' : ''
+    // running: the cloud's latest note (what it is doing now) and the file it touched last
+    const live = kind === 'run' && !v.allDone ? (f.message || '') : ''
+    const message = f.blocked || f.approval ? (f.message || (f.blocked ? 'Công việc báo bị vướng.' : 'Công việc chờ bạn trả lời.')) : stale || (live ? `Đang làm: ${live}` : '')
+    const reply = f.blocked || f.approval ? (f.source === 'drive' ? 'Trả lời ngay trong phiên gốc này — Claude chuyển sang phiên cloud.' : 'Trả lời trong phiên đang chạy việc này.') : stale ? 'Hỏi Claude ở phiên gốc kiểm tra phiên cloud.' : live && (f as any).activity ? `vừa cập nhật: ${(f as any).activity}` : ''
     const svg = cardSvg({ title: f.title || f.slug, group, status: { t: KIND_T[kind], kind }, total: v.total, etaText, steps, progress: v.frac, message, reply, updatedText: `${dur((now - f.updated) / 1000)} trước`, focused }, W)
     return (
       <Box key={v.allDone ? `job-${f.slug}` : `cur-${f.slug}`} flexDirection="column">
