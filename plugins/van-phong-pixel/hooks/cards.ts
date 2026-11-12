@@ -8,7 +8,13 @@ type Kind = 'run' | 'wait' | 'err' | 'done' | 'stale'
 
 const SANS = `font-family="Segoe UI,system-ui,-apple-system,Roboto,sans-serif"`
 const esc = (s: string) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-const fit = (s: string, px: number, size: number) => { const n = Math.max(4, Math.floor(px / (size * 0.56))), a = [...String(s)]; return a.length > n ? a.slice(0, n - 1).join('') + '…' : a.join('') }
+// width-aware cut: CJK / full-width glyphs are about twice as wide as Latin ones
+const cw = (ch: string) => { const p = ch.codePointAt(0) ?? 0; return (p >= 0x2E80 && p <= 0x9FFF) || (p >= 0xAC00 && p <= 0xD7A3) || (p >= 0xF900 && p <= 0xFAFF) || (p >= 0xFF00 && p <= 0xFF60) || (p >= 0x3000 && p <= 0x303F) ? 1.1 : 0.6 }
+const fit = (s: string, px: number, size: number) => {
+  const a = [...String(s)]; let w = 0
+  for (let i = 0; i < a.length; i++) { w += cw(a[i]) * size; if (w > px) return a.slice(0, Math.max(1, i - 1)).join('') + '…' }
+  return a.join('')
+}
 const R = (x: number, y: number, w: number, h: number, c: string, extra = '') => `<rect x="${x}" y="${y}" width="${w}" height="${h}" fill="${c}"${extra}/>`
 const T = (x: number, y: number, s: string, c: string, size: number, extra = '') => `<text x="${x}" y="${y}" ${SANS} font-size="${size}" fill="${c}"${extra}>${esc(s)}</text>`
 const TR = (x: number, y: number, s: string, c: string, size: number, extra = '') => T(x, y, s, c, size, ` text-anchor="end"${extra}`)

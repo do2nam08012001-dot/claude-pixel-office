@@ -48,7 +48,7 @@ const dur = (s: number) => (s < 90 ? `${Math.max(1, Math.round(s))} giây` : s <
 const clock = (ms: number) => { const d = new Date(ms); return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}` }
 
 type StepView = Step & { state: 'done' | 'now' | 'wait'; took?: number; elapsed?: number; left?: number | null; guess?: number | null; w: number }
-type View = { steps: StepView[]; idx: number; allDone: boolean; progress: number; frac: number; scene: any; total: number; remaining: number | null; known: boolean }
+type View = { over: boolean; steps: StepView[]; idx: number; allDone: boolean; progress: number; frac: number; scene: any; total: number; remaining: number | null; known: boolean }
 
 function view(f: Film, now: number): View {
   let steps: Step[], idx: number, allDone: boolean, progress: number, scene: any
@@ -80,21 +80,29 @@ function view(f: Film, now: number): View {
   const doneT = tooks.filter((x): x is number => typeof x === 'number')
   const avg = doneT.length ? doneT.reduce((a, b) => a + b, 0) / doneT.length : null
   let remaining: number | null = 0, known = true, frac = 0
+  // how fast this job runs vs the estimates (finished steps): later steps are scaled by it
+  let tookSum = 0, estSum = 0
+  steps.forEach((s, i) => { if ((allDone || i < idx) && tooks[i] && s.est) { tookSum += tooks[i]!; estSum += s.est } })
+  const pace = estSum > 0 ? Math.max(0.5, Math.min(3, tookSum / estSum)) : 1
+  let over = false
   const sv: StepView[] = steps.map((s, i) => {
     if (allDone || i < idx) { const took = tooks[i]; return { ...s, state: 'done', took, w: took ?? s.est ?? avg ?? 60 } }
     if (i === idx) {
       const elapsed = h[s.id]?.start ? Math.max(0, (now - h[s.id].start) / 1000) : undefined
+      // time left: the job's own ETA, else from the reported share, else the (pace-scaled) estimate while it still holds.
+      // A step past its estimate with no reported share has NO honest ETA: say so instead of a number that keeps sliding.
+      const base = s.est ? s.est * pace : avg
       let left: number | null = typeof f.eta === 'number' ? f.eta
-        : progress > 0.05 && elapsed ? elapsed * (1 - progress) / progress
-        : s.est ? Math.max(s.est - (elapsed ?? 0), s.est * 0.1)
-        : avg ? Math.max(avg - (elapsed ?? 0), avg * 0.1) : null
+        : progress > 0.03 && elapsed ? elapsed * (1 - progress) / progress
+        : base && (elapsed ?? 0) < base ? base - (elapsed ?? 0) : null
+      if (left === null && !(progress > 0.03)) over = true
       if (left === null) known = false; else remaining! += left
       // share of the current step done: reported progress, else time spent vs time still expected (never 100 %)
-      frac = progress > 0 ? progress : elapsed && left != null ? elapsed / (elapsed + left) : 0
+      frac = progress > 0 ? progress : elapsed && left != null ? elapsed / (elapsed + left) : over ? 0.9 : 0
       frac = Math.min(0.95, Math.max(0, frac))
       return { ...s, state: 'now', elapsed, left, w: s.est ?? avg ?? ((elapsed ?? 0) + (left ?? 0) || 60) }
     }
-    const guess = s.est ?? avg
+    const guess = s.est ? s.est * pace : avg
     if (guess == null) known = false; else remaining! += guess
     return { ...s, state: 'wait', guess, w: guess ?? 60 }
   })
@@ -105,7 +113,7 @@ function view(f: Film, now: number): View {
   // total % = finished step weights + the current step's share, over all weights (same weights as the bar segments)
   const W = sv.reduce((a, s) => a + s.w, 0) || 1
   const total = sv.reduce((a, s) => a + (s.state === 'done' ? s.w : s.state === 'now' ? s.w * frac : 0), 0) / W
-  return { steps: sv, idx, allDone, progress, frac, scene, total: allDone ? 1 : Math.min(0.99, total), remaining: known ? remaining : null, known }
+  return { over, steps: sv, idx, allDone, progress, frac, scene, total: allDone ? 1 : Math.min(0.99, total), remaining: known ? remaining : null, known }
 }
 
 // Pull complete JSON objects out of concatenated text (rclone cat joins files; files may be pretty-printed).
@@ -310,7 +318,7 @@ async function drawOffice($: any, e: any) {
   const card = (f: Film) => {
     const v = view(f, now), kind = kindOf(f), focused = f.slug === shown?.slug
     const group = GROUP_VI[f.group ?? f.skill ?? ''] ?? f.group ?? f.skill ?? ''
-    const etaText = v.allDone ? 'đã xong' : kind === 'stale' ? 'im lặng — không ước lượng' : v.remaining == null ? 'chưa đủ dữ liệu để ước lượng' : `còn ~${dur(v.remaining)} · xong ~${clock(now + v.remaining * 1000)}`
+    const etaText = v.allDone ? 'đã xong' : kind === 'stale' ? 'im lặng — không ước lượng' : v.over ? 'bước này quá dự kiến — chờ cloud báo %' : v.remaining == null ? 'chưa đủ dữ liệu để ước lượng' : `còn ~${dur(v.remaining)} · xong ~${clock(now + v.remaining * 1000)}`
     const steps: CardStep[] = v.steps.map(s => ({
       label: s.label, role: s.role, state: s.state, w: s.w,
       took: s.took ? dur(s.took) : undefined, elapsed: s.elapsed ? dur(s.elapsed) : undefined,
