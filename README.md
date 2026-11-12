@@ -27,7 +27,7 @@ The pane opens with every new session; `/vp` opens it again.
 Any workflow appears in the office once it writes a status file. The easiest way is `tools/office-status.mjs` (Node 18+):
 
 ```bash
-node tools/office-status.mjs init blog-01 --title "Viết blog" --steps "Thu thập:fetch,Đọc tài liệu:research,Dàn ý:plan,Viết bài:build,Biên tập:check,Đăng bài:deliver"
+node tools/office-status.mjs init blog-01 --title "Viết blog" --steps "Thu thập:fetch,Đọc tài liệu:research,Dàn ý:plan,Viết bài:build,Biên tập:check,Đăng bài:deliver" --est "2,10,5,20,8,1"
 node tools/office-status.mjs step blog-01 4 --progress 0.35 --eta 900
 node tools/office-status.mjs approval blog-01 "Duyệt dàn ý"      # orange ! over the chairman
 node tools/office-status.mjs resume blog-01
@@ -48,7 +48,7 @@ Each step names a **role** — the room and employee that act it out:
 | `check` | QA walking to the checklist | review, test, edit, verify |
 | `deliver` | courier bringing the result to the chairman | publish, send, deploy |
 
-The labels you give the steps become the room name tags. Steps without a role get one by position.
+The labels you give the steps become the room name tags. `--est` (minutes per step, optional) and the measured time of finished steps give the total progress bar and "time left / done at"; the pane scrolls to the step being worked on. Steps without a role get one by position.
 
 ### Let Claude update the office itself
 
@@ -72,7 +72,7 @@ The file format is in [plugins/van-phong-pixel/README.md](plugins/van-phong-pixe
 ## Editing the art
 
 The scene is pure SVG paths with CSS animation (no images, no script). Source in `art-source/`: change `build3.mjs`
-or `scene4.mjs`, run `node art-source/build3.mjs`, then put `assets3.json` into `plugins/van-phong-pixel/hooks/assets.ts`
-and `scene4.mjs` into `hooks/scene.ts`.
+or `scene5.mjs`, run `node art-source/build3.mjs`, then put `assets3.json` into `plugins/van-phong-pixel/hooks/assets.ts`
+and `scene5.mjs` into `hooks/scene.ts`.
 
 License: MIT.

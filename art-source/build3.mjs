@@ -76,7 +76,7 @@ bg.rect(168, 8, 2, 0, '#000');
 function rug(x, y, w, h, base, border, pat) {
   bg.rect(x + 1, y + h, w, 2, '#00000025'); bg.rect(x, y, w, h, border); bg.rect(x + 3, y + 3, w - 6, h - 6, base);
   bg.rect(x + 5, y + 5, w - 10, h - 10, border); bg.rect(x + 6, y + 6, w - 12, h - 12, base);
-  for (let j = y + 9; j < y + h - 8; j += 5) for (let i = x + 9 + ((j - y) / 5 % 2) * 2.5; i < x + w - 8; i += 5) { bg.set(i, j, pat); bg.set(i + 1, j, pat); }
+  for (let j = y + 10; j < y + h - 9; j += 8) bg.hline(x + 9, j, w - 18, pat);
 }
 rug(14, 64, 66, 54, '#3E5C76', '#9FB7CC', '#5A7B97');
 rug(94, 70, 72, 48, '#4F7C4A', '#D3BC86', '#6E9C66');

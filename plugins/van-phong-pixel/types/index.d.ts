@@ -1,5 +1,6 @@
 export type Role = 'fetch' | 'research' | 'plan' | 'build' | 'check' | 'deliver'
-export type Step = { id: string; label: string; role: Role }
+/** est: estimated seconds for the step (optional) */
+export type Step = { id: string; label: string; role: Role; est?: number }
 export type Film = {
   slug: string
   title: string
@@ -11,11 +12,14 @@ export type Film = {
   step?: string
   progress?: number
   done?: boolean
+  /** start/end (ms) of each step id, written by office-status / the video repos */
+  history?: Record<string, { start: number; end?: number }>
   /** legacy video status (v1) */
   stage?: 'idle' | 'inputs' | 'research' | 'plan' | 'render' | 'qa' | 'deliver' | 'done'
   render?: number
   plan?: number
   research?: number
+  /** seconds left in the current step */
   eta?: number | null
   blocked?: boolean
   approval?: boolean

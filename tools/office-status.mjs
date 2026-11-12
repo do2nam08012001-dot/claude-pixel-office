@@ -3,7 +3,8 @@
 // Files go to ~/.claude/van-phong/status/<slug>.json (read by the pane every 30 s); add --drive <remote:path> to also
 // upload to rclone (the pane reads <drive>/*/status/*.json, e.g. --drive gdrive:jp-studio/my-group).
 //
-//   node office-status.mjs init <slug> --title "Viết blog" --steps "Thu thập:fetch,Đọc tài liệu:research,Dàn ý:plan,Viết:build,Biên tập:check,Đăng:deliver" [--group blog]
+//   node office-status.mjs init <slug> --title "Viết blog" --steps "Thu thập:fetch,Đọc tài liệu:research,Dàn ý:plan,Viết:build,Biên tập:check,Đăng:deliver" [--group blog] [--est "2,10,5,20,8,1"]
+//        --est: estimated minutes per step (for the total ETA); the pane also learns from the steps already finished
 //   node office-status.mjs step <slug> <stepId|number> [--progress 0.4] [--eta 600]   (number = 1-based position)
 //   node office-status.mjs progress <slug> <0..1> [--eta seconds]
 //   node office-status.mjs next <slug>              (current step done, move to the next one)
@@ -26,7 +27,9 @@ const file = (s) => path.join(dir, `${s}.json`);
 const load = (s) => { try { return JSON.parse(fs.readFileSync(file(s), 'utf8')); } catch { return null; } };
 const idOf = (label, i) => (label.normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/đ/g, 'd').replace(/Đ/g, 'D').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || `step-${i + 1}`);
 function save(st) {
-  st.updated = Date.now(); fs.mkdirSync(dir, { recursive: true }); fs.writeFileSync(file(st.slug), JSON.stringify(st) + '\n');
+  const now = Date.now(); st.updated = now; st.history ||= {};
+  if (st.step && st.step !== 'done' && !st.history[st.step]) st.history[st.step] = { start: now };
+  for (const [k, h] of Object.entries(st.history)) if (k !== st.step && !h.end) h.end = now; fs.mkdirSync(dir, { recursive: true }); fs.writeFileSync(file(st.slug), JSON.stringify(st) + '\n');
   const drive = opt('drive') || st.drive;
   if (drive) { try { execFileSync('rclone', ['copyto', file(st.slug), `${drive.replace(/\/$/, '')}/status/${st.slug}.json`], { stdio: 'ignore' }); } catch { console.error('(không đẩy được lên Drive — rclone/remote?)'); } }
   const cur = (st.workflow || []).findIndex((s) => s.id === st.step);
@@ -40,6 +43,7 @@ if (cmd === 'init') {
   const steps = (opt('steps') || 'Chuẩn bị:fetch,Nghiên cứu:research,Kế hoạch:plan,Thực hiện:build,Kiểm tra:check,Bàn giao:deliver').split(',').map((x, i) => {
     const [label, role] = x.split(':').map((t) => t.trim()); return { id: idOf(label, i), label, role: ROLES.includes(role) ? role : ROLES[Math.min(i, 5)] };
   });
+  (opt('est') || '').split(',').forEach((m, i) => { if (steps[i] && m.trim() !== '' && !isNaN(Number(m))) steps[i].est = Math.round(Number(m) * 60); });
   st = { slug, title: opt('title') || slug, group: opt('group') || '', workflow: steps, step: steps[0].id, progress: 0, eta: null, blocked: false, approval: false, message: '', done: false, drive: opt('drive') || '' };
   save(st); process.exit(0);
 }
