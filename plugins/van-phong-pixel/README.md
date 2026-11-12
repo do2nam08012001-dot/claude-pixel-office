@@ -8,7 +8,7 @@ who walks, types and reacts according to the job's real status. Every 30 seconds
   a green **✓** with confetti when the job is done;
 - one row per job: current step, progress bar, ETA, the whole step list (✓ done · ● now · ! blocked · ○ later), and a
   warning when a job has not updated for 15 minutes;
-- an inbox of errors and approvals. "Xem" shows a job in the office, "Làm mới" reads at once, `/van-phong` reopens the pane.
+- an inbox of errors and approvals. "Xem" shows a job in the office, "Làm mới" reads at once, `/vp` reopens the pane.
 
 ## Sources
 

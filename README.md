@@ -20,7 +20,7 @@ From a shell:
 claude plugin install van-phong-pixel --marketplace do2nam08012001-dot/claude-pixel-office
 ```
 
-The pane opens with every new session; `/van-phong` opens it again.
+The pane opens with every new session; `/vp` opens it again.
 
 ## Show your own workflow / Hiện quy trình của bạn
 

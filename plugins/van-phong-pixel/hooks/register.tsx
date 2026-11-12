@@ -111,14 +111,14 @@ async function refresh($: any) {
 
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
-    await $.command.register({ name: 'van-phong', description: 'Mở ô văn phòng pixel: tiến độ, lỗi và việc chờ duyệt của các quy trình đang chạy' })
+    await $.command.register({ name: 'vp', description: 'Mở ô văn phòng pixel: tiến độ, lỗi và việc chờ duyệt của các quy trình đang chạy' })
     void $.ui.open({ id: PANE, title: TITLE })
     void refresh($)
     $.clock.every(POLL_MS, () => { void refresh($) })
     return next(e)
   })
 
-  on('command.run', { command: 'van-phong' }, async $ => {
+  on('command.run', { command: 'vp' }, async $ => {
     await $.ui.open({ id: PANE, title: TITLE })
     void refresh($)
     return { text: 'Đã mở ô Văn phòng.' }
