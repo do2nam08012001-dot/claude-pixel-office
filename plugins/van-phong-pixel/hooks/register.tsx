@@ -24,6 +24,8 @@ const owned = atom({ plugin: 'van-phong-pixel', key: 'owned' } as const, [] as O
 // jobs of other sessions shown in the "other jobs" strip (not followed here)
 const others = atom({ plugin: 'van-phong-pixel', key: 'others' } as const, [] as Film[], { shape: 'films-3' })
 let busy = false, again = false, cwdSkill: string | undefined, skills: string[] = [], scanOk = 0, ownKey = ''
+// one random seed per session: every redraw of the office picks the same props, moods and routines
+const SEED = Math.floor(Math.random() * 2 ** 31)
 const finish = new Map<string, number>()   // slug -> finish time shown (ms)
 const soundOn = atom({ plugin: 'van-phong-pixel', key: 'soundOn' } as const, true)
 async function sound($: any, name: 'ting' | 'chime') {
@@ -422,10 +424,10 @@ async function drawOffice($: any, e: any) {
   const active = list.filter(f => !isDone(f)), finished = list.filter(isDone)
   const shown = list.find(f => f.slug === want) ?? active[0] ?? list[0]
   const errs = list.filter(f => f.blocked).length, waits = list.filter(f => f.approval && !f.blocked).length
-  const sceneState = { ...(shown ? view(shown, now).scene : { active: null, doneRoles: [] }), now, hour: new Date(now).getHours() }
+  const sceneState = { ...(shown ? view(shown, now).scene : { active: null, doneRoles: [] }), now, seed: SEED, hour: new Date(now).getHours() }
   // progress is animated inside the SVG (HP bars run at the real rate), so only visible state changes redraw it
   // the HP bar is redrawn every 5 % (it animates smoothly in between), other visible changes redraw at once
-  const key = JSON.stringify({ ...sceneState, now: undefined, progress: Math.round((sceneState.progress ?? 0) * 20), rate: undefined, handoffAge: undefined, px })
+  const key = JSON.stringify({ ...sceneState, now: undefined, progress: Math.round((sceneState.progress ?? 0) * 5), rate: undefined, handoffAge: undefined, px })
   if (key !== sceneKey) {
     sceneKey = key
     // one square picture that scales with the pane (the background is light enough now to fit with everything)
@@ -489,7 +491,7 @@ async function drawOffice($: any, e: any) {
     <Box flexDirection="column" gap={1}>
       {Svg ? <Svg source={headerSvg(W, active.length, waits, errs, finished.length)} alt={`Văn phòng: ${active.length} đang chạy, ${waits} chờ duyệt, ${errs} lỗi`} /> : <Text bold>Văn phòng · chủ tịch</Text>}
       {Svg ? (
-        <Box key="office" position="relative" flexDirection="column">
+        <Box key="office" position="relative" flexDirection="column" width={px} height={px}>
           <Svg source={shownSvg} alt={shown ? `Văn phòng: ${shown.title || shown.slug}` : 'Văn phòng đang chờ việc'} width={px} height={px} isInteractive />
           {overlaySvg ? <Box key="office-old" position="absolute" top={0} left={0}><Svg source={overlaySvg} alt="Văn phòng" width={px} height={px} isInteractive /></Box> : null}
         </Box>

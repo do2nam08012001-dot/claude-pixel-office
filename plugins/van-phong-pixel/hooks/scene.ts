@@ -207,7 +207,10 @@ export function officeSvg(A, s = {}) {
   let under = '', back = '', mid = '', front = '', walk = '', top = '';
   // ---------- ambient light ----------
   under += G(rect(140, 8, 2, 8, '#FFFFFF', '', .5) + rect(144, 8, 1, 8, '#FFFFFF', '', .35), 'class="glint"');
-  const pick = (a2) => a2[Math.floor(Math.random() * a2.length)];
+  let sd = (st0.seed ?? 20261113) >>> 0;
+  const rnd = () => { sd = (sd + 0x6D2B79F5) >>> 0; let t = Math.imul(sd ^ (sd >>> 15), 1 | sd); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
+  const NOW_S = (st0.now || Date.now()) / 1000;
+  const pick = (a2) => a2[Math.floor(rnd() * a2.length)];
   // ---------- chairman ----------
   const bossMode = done ? 'wave' : st.approval || err ? 'worried' : 'idle';
   top += done ? emote('heart', 222, 60, 0, 3) : err ? emote('bang', 222, 60, 0, 2) : st.approval ? '' : emote('star', 222, 60, 2, 7);
@@ -221,7 +224,7 @@ export function officeSvg(A, s = {}) {
   const BREAK = 120;   // shared idle cycle (s), two halves of meetings; everyone on break meets on the same beat
   // a different look each time the scene is built: props and emotes are picked at random,
   // and the whole break routine starts at a random point of its cycle
-  const breakAt = Math.round(Math.random() * BREAK);
+  const breakAt = Math.round((NOW_S + rnd() * BREAK) % BREAK);
   const breakCss0 = `.catp,.catf,.catb2,.catz,.cateat{animation-delay:-${breakAt}s}`;
   const P = Math.max(0, Math.min(1, st0.progress ?? 0)), hand = st0.handoff && !st0.allDone ? st0.handoff : null;
   const skip = (role) => hand && hand.from === role;
@@ -261,7 +264,7 @@ export function officeSvg(A, s = {}) {
   const PLAN = {
     plan: [5, 2, [here([[58, 70]]), v([[94, 128]]), v([[164, 128], [164, 100]]), v([[208, 128], [208, 112], [184, 112]]), v([[121, 128], [121, 196], [128, 196]])]],
     research: [4.5, 2.5, [v([[90, 128], [90, 100]]), v([[112, 128]]), v([[208, 128], [208, 112], [198, 112]]), v([[207, 128], [207, 196], [226, 200]]), v([[60, 128]])]],
-    build: [5.5, 1.5, [v([[121, 130], [121, 160], [96, 160], [96, 214]]), v([[207, 130], [207, 196], [222, 198]]), v([[208, 130], [208, 112], [226, 112]]), v([[84, 130]]), v([[80, 130], [80, 100]])]],
+    build: [5.5, 1.5, [v([[121, 130], [121, 160], [96, 160], [96, 196]]), v([[207, 130], [207, 196], [222, 198]]), v([[208, 130], [208, 112], [226, 112]]), v([[84, 130]]), v([[80, 130], [80, 100]])]],
     check: [4, 2, [v([[41, 130], [41, 168], [52, 168]]), v([[207, 130], [207, 196], [226, 200]]), here([[138, 196], [154, 196], [138, 196], [154, 196]]), v([[136, 130]]), v([[164, 130], [164, 100]])]],
     fetch: [3.5, 2.5, [v([[208, 112]]), v([[162, 128], [162, 98], [150, 96]]), v([[60, 130]]), v([[152, 130]]), v([[80, 130], [80, 100]])]],
     boss: [6, 2, [v([[80, 128], [80, 100]]), v([[164, 128], [164, 100]]), v([[128, 128]]), v([[207, 196], [200, 198]]), v([[121, 128], [121, 194], [118, 194]])]],
@@ -270,7 +273,7 @@ export function officeSvg(A, s = {}) {
   const routine = (role) => {
     const H = HOME[role], [w, p, outs] = PLAN[role], cyc = (w + p) * 60, total = cyc * outs.length, P2 = [[0, ...H]];
     const pc = (sec) => +(sec / total * 100).toFixed(3);
-    outs.slice().sort(() => Math.random() - .5).forEach((plan, i) => {
+    outs.map((o2) => [rnd(), o2]).sort((x, y) => x[0] - y[0]).map((x) => x[1]).forEach((plan, i) => {
       const path = [H, ...(plan.via ? EXIT[role].slice(1) : []), ...plan.pts], d = [];
       for (let k = 1; k < path.length; k++) d.push(Math.abs(path[k][0] - path[k - 1][0]) + Math.abs(path[k][1] - path[k - 1][1]) || 1);
       const dist = d.reduce((a2, b2) => a2 + b2, 0), walk = Math.min(p * 60 * .35, dist / 22);
@@ -288,7 +291,7 @@ export function officeSvg(A, s = {}) {
   // at the desk: typing hands and bits of code floating up
   const WORK = st0.lite ? undefined : G(rect(3, 15, 3, 1, '#FFE0B2', 'tap t0') + rect(10, 15, 3, 1, '#FFE0B2', 'tap t1') + rect(2, -3, 1.5, 1.5, '#B9FFE9', 'rise r0', 0) + rect(7, -3, 1.5, 1.5, '#FFF59D', 'rise r1', 0) + rect(12, -3, 1.5, 1.5, '#B9FFE9', 'rise r2', 0));
   const offs = [];   // each person starts somewhere else in their own cycle
-  const own = (name, role) => { offs.push(`.p-${name},.m-${name},.s-${name},.f-${name},.w-${name},.a-${name}{animation-delay:-${Math.round(Math.random() * CYC(role))}s}`); return name; };
+  const own = (name, role) => { offs.push(`.p-${name},.m-${name},.s-${name},.f-${name},.w-${name},.a-${name}{animation-delay:-${Math.round((NOW_S + rnd() * CYC(role)) % CYC(role))}s}`); return name; };
 
   if (bossMode === 'idle' && st0.lite2) mid += actor('boss', 211, 70, 'idle');
   else if (bossMode === 'idle') mid += walker('boss', own('bossIdle', 'boss'), routine('boss'), CYC('boss'), { home: HOME.boss, work: WORK, act: pick([ACT.coffee, ACT.phone]), emo: pick(['star', 'note']), emoDelay: 2, emoEvery: 5, mood: 'happy' });
@@ -314,7 +317,7 @@ export function officeSvg(A, s = {}) {
   for (const x0 of [4, 26]) for (let j = 0; j < 8; j++) back += rect(x0 + 3, 180 + j * 6, 1.5, 1.5, rOn ? (err && j % 3 === 0 ? '#FF5252' : '#69F0AE') : '#33404C', rOn ? `led l${(j + x0) % 3}` : '') + rect(x0 + 6, 180 + j * 6, 1.5, 1.5, rOn ? '#FFD54F' : '#33404C', rOn ? `led l${(j + x0 + 1) % 3}` : '');
   back += rect(4, 229.5, 42, 3, '#10161B') + rect(5, 230.5, Math.round(40 * rp), 1, err && rOn ? '#FF5252' : '#69F0AE');
   if (rOn) { mid += late('build', frantic('tech', 58, 186, P, err), actor('tech', 58, 186, 'happy', true)); under += workGlow(0, 168, 84, 88); if (!err) top += gear(50, 180) + [8, 18, 30, 40].map((x, i) => rect(x, 170, 1, 3, '#B3E5FC', `heat h${i % 3}`, 0)).join(''); }
-  else if (!skip('build')) walk += idleGo('build') || walker('tech', own('techIdle', 'build'), routine('build'), CYC('build'), { home: HOME.build, work: WORK, act: pick([ACT.game, ACT.noodles]), emo: pick(['star', 'heart', 'note']), emoDelay: 1, emoEvery: 4, mood: 'happy' });
+  else if (!skip('build')) mid += idleGo('build') || walker('tech', own('techIdle', 'build'), routine('build'), CYC('build'), { home: HOME.build, work: WORK, act: pick([ACT.game, ACT.noodles]), emo: pick(['star', 'heart', 'note']), emoDelay: 1, emoEvery: 4, mood: 'happy' });
   front += screen(56, 197, 14, 8, rOn, err ? 'err' : 'ok');
   if (rOn && !err) top += glyphs(58, 196);
   if (rOn && err) { top += bubble('err', 70, 160); under += zoneAlarm(0, 168, 84, 88); }
