@@ -491,7 +491,7 @@ async function drawOffice($: any, e: any) {
     <Box flexDirection="column" gap={1}>
       {Svg ? <Svg source={headerSvg(W, active.length, waits, errs, finished.length)} alt={`Văn phòng: ${active.length} đang chạy, ${waits} chờ duyệt, ${errs} lỗi`} /> : <Text bold>Văn phòng · chủ tịch</Text>}
       {Svg ? (
-        <Box key="office" position="relative" flexDirection="column" width={px} height={px}>
+        <Box key="office" position="relative" flexDirection="column">
           <Svg source={shownSvg} alt={shown ? `Văn phòng: ${shown.title || shown.slug}` : 'Văn phòng đang chờ việc'} width={px} height={px} isInteractive />
           {overlaySvg ? <Box key="office-old" position="absolute" top={0} left={0}><Svg source={overlaySvg} alt="Văn phòng" width={px} height={px} isInteractive /></Box> : null}
         </Box>
