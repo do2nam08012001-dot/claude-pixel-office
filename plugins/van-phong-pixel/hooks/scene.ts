@@ -145,7 +145,8 @@ export function officeSvg(A, s = {}) {
   const zz = (x, y) => ['z', 'z', 'Z'].map((t, i) => G(`<text x="${x + i * 3}" y="${y - i * 3}" font-family="Consolas,monospace" font-size="${5 + i}" font-weight="700" fill="#E3F2FD" stroke="#2A1E1E" stroke-width=".7" paint-order="stroke">${t}</text>`, `class="zz" style="animation-delay:${i * .8}s"`)).join('');
   const tag = (x, y, t, on, col) => {
     const w = [...t].length * 2.85 + 9;
-    return rect(x - .5, y - .5, w + 1, 9, '#2A1E1E') + rect(x, y, w, 8, col) + rect(x, y, w, 1, '#FFFFFF', '', .25) + rect(x + 2, y + 2.5, 3, 3, on ? '#7CFFB2' : '#8A94A0', on ? 'led' : '')
+    return (on ? rect(x - 3, y - 3, w + 6, 14, '#FFE066', 'tagglow', .9) + rect(x - 1.5, y - 1.5, w + 3, 11, '#FFF8C4', 'tagglow') : '')
+      + rect(x - .5, y - .5, w + 1, 9, '#2A1E1E') + rect(x, y, w, 8, col) + (on ? rect(x, y, w, 8, '#FFFFFF', 'tagflash', 0) : '') + rect(x, y, w, 1, '#FFFFFF', '', .25) + rect(x + 2, y + 2.5, 3, 3, on ? '#7CFFB2' : '#8A94A0', on ? 'led' : '')
       + `<text x="${x + 7.5}" y="${y + 6}" font-family="Consolas,'Courier New',monospace" font-size="5" fill="#FFFFFF">${t}</text>`;
   };
   const screen = (x, y, w, h, on, mood = 'ok') => on
@@ -284,6 +285,7 @@ export function officeSvg(A, s = {}) {
 .catb2{animation:catb 32s step-end infinite}@keyframes catb{0%{animation-timing-function:step-end}}
 .catz{opacity:0;animation:catz 32s step-end infinite}@keyframes catz{0%{opacity:0}62%{opacity:1}}
 .cateat{opacity:0;animation:cate 32s step-end infinite}@keyframes cate{0%{opacity:0}18%{opacity:1}40%{opacity:0}}@keyframes showAt{to{opacity:1}}
+.tagglow{animation:tagg .9s steps(1) infinite}@keyframes tagg{50%{opacity:.15}}.tagflash{animation:tagf .9s steps(1) infinite}@keyframes tagf{50%{opacity:.35}}
 .emo{opacity:0;animation:emo 6s steps(1) infinite}@keyframes emo{0%{opacity:0}8%{opacity:1;transform:translateY(-2px)}12%{transform:none}40%{opacity:1}44%{opacity:0}}
 .hop{animation:hop 3.2s steps(1) infinite}@keyframes hop{0%{transform:none}70%{transform:translateY(-2px)}76%{transform:translateY(-3px)}82%{transform:none}}
 .slam{animation:slam 2.6s steps(1) infinite}@keyframes slam{0%{transform:none}80%{transform:translateY(-2px)}86%{transform:translateY(1px)}90%{transform:none}}@keyframes hideAt{to{opacity:0}}` + pathCss;
