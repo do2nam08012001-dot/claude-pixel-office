@@ -451,8 +451,8 @@ async function drawOffice($: any, e: any) {
     // a wooden plate (box colour + dark border) around a plain Button: no picture on top of it, so nothing can drift
     const bg = tone === 'primary' ? '#2E7D4F' : tone === 'danger' ? '#8E2F35' : '#7A4A2E'
     return (
-      <Box key={key + '-box'} backgroundColor={bg} borderStyle="single" borderColor="#2A1E1E" paddingX={1}>
-        <Button key={key} plain label={label} onPress={onPress}><Text color="#FFF3D6" bold>{label}</Text></Button>
+      <Box key={key + '-box'} backgroundColor={bg} borderStyle="bold" borderColor="#2A1E1E" paddingX={1}>
+        <Button key={key} plain label={label} onPress={onPress}><Text color="#FFF3D6" bold mono>{label.toUpperCase()}</Text></Button>
       </Box>
     )
   }
@@ -479,10 +479,10 @@ async function drawOffice($: any, e: any) {
         {Svg ? <Svg source={svg} alt={`${f.title || f.slug}: ${KIND_T[kind]}, tổng ${Math.round(v.total * 100)}%, ${etaText}`} /> : <Text>{f.title || f.slug} · {KIND_T[kind]} · {Math.round(v.total * 100)}% · {etaText}</Text>}
         <Box flexDirection="row" justifyContent="flex-end" gap={1}>
           {f.approval && !f.blocked ? pixBtn('duyet-' + f.slug, "✓ Duyệt", () => $.prompt.submit({ text: `Duyệt ${f.slug} — chuyển nguyên lời "duyệt" sang phiên cloud của phim này.` }), 'primary') : null}
-          {f.approval || f.blocked ? pixBtn('sua-' + f.slug, f.blocked ? '✎ Trả lời lỗi' : '✎ Yêu cầu sửa', () => $.prompt.fill({ text: `${f.blocked ? 'Trả lời lỗi' : 'Yêu cầu sửa'} ${f.slug} (chuyển sang phiên cloud): ` }), 'wood') : null}
-          {v.allDone && f.source === 'drive' ? pixBtn('tai-' + f.slug, "⬇ Tải video về", () => $.prompt.submit({ text: `Tải video ${f.slug} về máy: chạy local/fetch.sh ${f.slug}, rồi báo đường dẫn thư mục ket-qua.` }), 'primary') : null}
-          {!focused ? pixBtn('xem-' + f.slug, "👁 Xem trong văn phòng", () => update($, focus, () => f.slug), 'wood') : null}
-          {pixBtn('huy-' + f.slug, kind === 'stale' || v.allDone ? '🗑 Xóa khỏi văn phòng' : '✕ Hủy theo dõi', () => drop($, f, kind === 'stale'), 'danger')}
+          {f.approval || f.blocked ? pixBtn('sua-' + f.slug, f.blocked ? '› Trả lời lỗi' : '› Yêu cầu sửa', () => $.prompt.fill({ text: `${f.blocked ? 'Trả lời lỗi' : 'Yêu cầu sửa'} ${f.slug} (chuyển sang phiên cloud): ` }), 'wood') : null}
+          {v.allDone && f.source === 'drive' ? pixBtn('tai-' + f.slug, "↓ Tải video về", () => $.prompt.submit({ text: `Tải video ${f.slug} về máy: chạy local/fetch.sh ${f.slug}, rồi báo đường dẫn thư mục ket-qua.` }), 'primary') : null}
+          {!focused ? pixBtn('xem-' + f.slug, "◉ Xem trong văn phòng", () => update($, focus, () => f.slug), 'wood') : null}
+          {pixBtn('huy-' + f.slug, kind === 'stale' || v.allDone ? '✕ Xóa khỏi văn phòng' : '✕ Hủy theo dõi', () => drop($, f, kind === 'stale'), 'danger')}
         </Box>
       </Box>
     )
@@ -521,7 +521,7 @@ async function drawOffice($: any, e: any) {
       {Svg ? <Svg source={footerSvg(W, p.error ? p.error : p.at ? `cập nhật ${dur((now - p.at) / 1000)} trước · làm mới mỗi 5 giây` : 'đang đọc trạng thái…', !!p.error)} alt={p.error || 'Văn phòng đang cập nhật trực tiếp'} /> : <Text dimColor>{p.error || 'Đang cập nhật'}</Text>}
       <Box flexDirection="row" justifyContent="flex-end">
         <Box flexDirection="row" gap={1}>
-          {pixBtn("am-thanh", (await read($, soundOn)) === false ? '🔇 Bật tiếng' : '🔊 Tắt tiếng', async () => { const on = !((await read($, soundOn)) ?? true); await update($, soundOn, () => on); try { await $.store.set('sound', on) } catch { /* read-only */ } }, 'wood')}
+          {pixBtn("am-thanh", (await read($, soundOn)) === false ? '♪ Bật tiếng' : '♪ Tắt tiếng', async () => { const on = !((await read($, soundOn)) ?? true); await update($, soundOn, () => on); try { await $.store.set('sound', on) } catch { /* read-only */ } }, 'wood')}
           {pixBtn("lam-moi", "⟳ Làm mới", () => { lastScrolled = ''; return refresh($) }, 'wood')}
         </Box>
       </Box>

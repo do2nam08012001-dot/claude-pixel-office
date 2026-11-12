@@ -167,7 +167,7 @@ desk(102, 220, 60); monitor(108, 205); monitor(138, 205); kb(124, 221); papers(1
 fg.box(52, 206, 22, 8, { ...metal, topH: 3 }); fg.vline(55, 214, 14, '#37474F'); fg.vline(70, 214, 14, '#37474F'); fg.rect(52, 227, 22, 1, '#37474F'); fg.rect(53, 228, 3, 2, '#212121'); fg.rect(69, 228, 3, 2, '#212121'); laptop(55, 196);
 [[198, 240], [210, 240], [204, 231]].forEach(([x, y]) => crate(fg, x, y));
 fg.vline(222, 222, 24, '#455A64'); fg.rect(216, 244, 10, 3, '#455A64'); fg.rect(215, 247, 4, 4, '#212121'); fg.rect(223, 247, 4, 4, '#212121');
-[[78, 106], [164, 236]].forEach(([x, y]) => { fg.rect(x + 1, y + 10, 9, 2, '#00000030'); fg.box(x, y, 9, 10, { top: '#90A4AE', front: '#607D8B', line: '#37474F', topH: 3 }); fg.hline(x + 2, y + 1, 5, '#ECEFF1'); });
+// (bins removed: they looked odd) [[78, 106], [164, 236]].forEach(([x, y]) => { fg.rect(x + 1, y + 10, 9, 2, '#00000030'); fg.box(x, y, 9, 10, { top: '#90A4AE', front: '#607D8B', line: '#37474F', topH: 3 }); fg.hline(x + 2, y + 1, 5, '#ECEFF1'); });
 plant(bg, 2, 96, false);
 
 // ===== characters 16x24 =====

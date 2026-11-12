@@ -124,7 +124,8 @@ export function officeSvg(A, s = {}) {
       if (moving !== lastMove) { mv.push(`${r1(t)}%{opacity:${moving ? 1 : 0}}`); sv.push(`${r1(t)}%{opacity:${moving ? 0 : 1}}`); lastMove = moving; }
       const home = !!(o.home && atH(pts[i]) && (!n || atH(n)));
       if (o.work && home !== lastHome) { wk.push(`${r1(t)}%{opacity:${home ? 1 : 0}}`); lastHome = home; }
-      if (n && n[1] !== x && left !== lastLeft) { fc.push(`${r1(t)}%{scale:${left ? '-1 1' : '1'}}`); lastLeft = left; }
+      if (pts[i][3] && (pts[i][3] === 'L') !== lastLeft) { fc.push(`${r1(t)}%{scale:${pts[i][3] === 'L' ? '-1 1' : '1'}}`); lastLeft = pts[i][3] === 'L'; }
+      else if (n && n[1] !== x && left !== lastLeft) { fc.push(`${r1(t)}%{scale:${left ? '-1 1' : '1'}}`); lastLeft = left; }
     }
     pathCss += `.p-${name}{animation:P${name} ${secs}s linear ${once}}@keyframes P${name}{${pos}}`
       + `.m-${name}{animation:M${name} ${secs}s step-end ${once}}@keyframes M${name}{${mv.join('')}}`
@@ -261,37 +262,57 @@ export function officeSvg(A, s = {}) {
   WHO.boss = 'boss';
   const v = (pts) => ({ via: true, pts }), here = (pts) => ({ via: false, pts });
   // [work minutes, outing minutes] and five outings per person
-  const PLAN = {
-    plan: [5, 2, [here([[58, 70]]), v([[94, 128]]), v([[164, 128], [164, 100]]), v([[208, 128], [208, 112], [184, 112]]), v([[121, 128], [121, 196], [128, 196]])]],
-    research: [4.5, 2.5, [v([[90, 128], [90, 100]]), v([[112, 128]]), v([[208, 128], [208, 112], [198, 112]]), v([[207, 128], [207, 196], [226, 200]]), v([[60, 128]])]],
-    build: [5.5, 1.5, [v([[121, 130], [121, 160], [96, 160], [96, 196]]), v([[207, 130], [207, 196], [222, 198]]), v([[208, 130], [208, 112], [226, 112]]), v([[84, 130]]), v([[80, 130], [80, 100]])]],
-    check: [4, 2, [v([[41, 130], [41, 168], [52, 168]]), v([[207, 130], [207, 196], [226, 200]]), here([[138, 196], [154, 196], [138, 196], [154, 196]]), v([[136, 130]]), v([[164, 130], [164, 100]])]],
-    fetch: [3.5, 2.5, [v([[208, 112]]), v([[162, 128], [162, 98], [150, 96]]), v([[60, 130]]), v([[152, 130]]), v([[80, 130], [80, 100]])]],
-    boss: [6, 2, [v([[80, 128], [80, 100]]), v([[164, 128], [164, 100]]), v([[128, 128]]), v([[207, 196], [200, 198]]), v([[121, 128], [121, 194], [118, 194]])]],
+  // ---- break schedule: a 5-minute office rhythm, the same for everybody so meetings line up ----
+  // Each 5-minute cycle has 6 slots of 50 s; in every slot TWO people meet somewhere (so somebody is always out),
+  // everyone is out in 2 slots per cycle (~2 min with the walk) and at the desk the rest (~3 min).
+  // Five different cycles follow each other (25 min), so everyone has many different meetings.
+  // Meeting spots come in pairs side by side (16 px apart), the first faces right, the second left.
+  const SPOT = {
+    corrW: [[66, 128], [84, 128]], corrM: [[108, 128], [126, 128]], corrE: [[146, 130], [164, 130]],
+    cooler: [[58, 70], [78, 88]], qa: [[96, 196], [114, 196]], boss: [[180, 112], [198, 112]], vend: [[202, 196], [220, 196]],
   };
-  const CYC = (role) => { const [w, p, outs] = PLAN[role]; return Math.round((w + p) * 60 * outs.length); };
+  // how to get from the corridor to a spot, and which rooms hold a spot (people of that room walk there directly)
+  const INTO = { corrW: [], corrM: [], corrE: [], cooler: [[80, 128], [80, 88]], qa: [[121, 130], [121, 160]], boss: [[208, 128], [208, 112]], vend: [[207, 130], [207, 190]] };
+  const ROOM_OF = { cooler: 'plan', qa: 'check', boss: 'boss', vend: 'fetch' };
+  const CYCLES = [
+    [['plan', 'research', 'corrM'], ['build', 'check', 'qa'], ['fetch', 'boss', 'boss'], ['research', 'fetch', 'vend'], ['plan', 'boss', 'cooler'], ['check', 'build', 'corrE']],
+    [['research', 'boss', 'boss'], ['plan', 'check', 'qa'], ['build', 'fetch', 'vend'], ['research', 'plan', 'corrW'], ['check', 'boss', 'corrM'], ['fetch', 'build', 'corrE']],
+    [['plan', 'research', 'corrW'], ['fetch', 'check', 'qa'], ['build', 'boss', 'boss'], ['research', 'check', 'vend'], ['plan', 'fetch', 'cooler'], ['build', 'boss', 'corrE']],
+    [['research', 'fetch', 'corrM'], ['plan', 'boss', 'boss'], ['build', 'check', 'qa'], ['fetch', 'research', 'vend'], ['check', 'boss', 'corrE'], ['plan', 'build', 'corrW']],
+    [['check', 'fetch', 'corrE'], ['research', 'boss', 'cooler'], ['plan', 'check', 'qa'], ['build', 'fetch', 'vend'], ['research', 'plan', 'corrM'], ['build', 'boss', 'boss']],
+  ];
+  CYCLES.length = 3;   // three different cycles (15 min) keep the picture under the size cap
+  const SLOT_S = 50, CYCLE_S = SLOT_S * 6, ALL_S = CYCLE_S * CYCLES.length;
+  const CYC = () => ALL_S;
   const routine = (role) => {
-    const H = HOME[role], [w, p, outs] = PLAN[role], cyc = (w + p) * 60, total = cyc * outs.length, P2 = [[0, ...H]];
-    const pc = (sec) => +(sec / total * 100).toFixed(3);
-    outs.map((o2) => [rnd(), o2]).sort((x, y) => x[0] - y[0]).map((x) => x[1]).forEach((plan, i) => {
-      const path = [H, ...(plan.via ? EXIT[role].slice(1) : []), ...plan.pts], d = [];
+    const H = HOME[role], P2 = [[0, ...H]], pc = (sec) => +(sec / ALL_S * 100).toFixed(2);
+    CYCLES.forEach((cyc, ci) => cyc.forEach(([ra, rb, spot], si) => {
+      const side = role === ra ? 0 : role === rb ? 1 : -1; if (side < 0) return;
+      const [sx, sy] = SPOT[spot][side];
+      // path: own room's spot -> walk straight; else out of the room, along the corridor, into the spot's room
+      const mid0 = ROOM_OF[spot] === role ? (role === 'boss' ? [[246, 70], [246, 112]] : []) : [...EXIT[role].slice(1), ...INTO[spot]];
+      // arrive from the outer side so the two face each other
+      const path = [H, ...mid0, [sx, sy]], d = [];
       for (let k = 1; k < path.length; k++) d.push(Math.abs(path[k][0] - path[k - 1][0]) + Math.abs(path[k][1] - path[k - 1][1]) || 1);
-      const dist = d.reduce((a2, b2) => a2 + b2, 0), walk = Math.min(p * 60 * .35, dist / 22);
-      const t0 = i * cyc + w * 60, t1 = (i + 1) * cyc - 1;
+      const dist = d.reduce((x, y) => x + y, 0), walk = Math.min(16, Math.max(4, dist / 28));
+      const t0 = ci * CYCLE_S + si * SLOT_S + .5, t1 = t0 + SLOT_S - 1;
       P2.push([pc(t0), ...H]);
       let acc = 0;
       for (let k = 1; k < path.length; k++) { acc += d[k - 1]; P2.push([pc(t0 + acc / dist * walk), ...path[k]]); }
-      const back = path.slice().reverse(), db = d.slice().reverse();
-      P2.push([pc(t1 - walk), ...back[0]]); acc = 0;
-      for (let k = 1; k < back.length; k++) { acc += db[k - 1]; P2.push([pc(t1 - walk + acc / dist * walk), ...back[k]]); }
-    });
+      const back = path.slice(0, -1).reverse(); back.unshift([sx, sy]);
+      const db = []; for (let k = 1; k < back.length; k++) db.push(Math.abs(back[k][0] - back[k - 1][0]) + Math.abs(back[k][1] - back[k - 1][1]) || 1);
+      const distB = db.reduce((x, y) => x + y, 0);
+      P2[P2.length - 1].push(side ? 'L' : 'R');   // the two face each other
+      P2.push([pc(t1 - walk), sx, sy, side ? 'L' : 'R']); acc = 0;
+      for (let k = 1; k < back.length; k++) { acc += db[k - 1]; P2.push([pc(t1 - walk + acc / distB * walk), ...back[k]]); }
+    }));
     P2.push([100, ...H]);
     return P2;
   };
   // at the desk: typing hands and bits of code floating up
   const WORK = st0.lite ? undefined : G(rect(3, 15, 3, 1, '#FFE0B2', 'tap t0') + rect(10, 15, 3, 1, '#FFE0B2', 'tap t1') + rect(2, -3, 1.5, 1.5, '#B9FFE9', 'rise r0', 0) + rect(7, -3, 1.5, 1.5, '#FFF59D', 'rise r1', 0) + rect(12, -3, 1.5, 1.5, '#B9FFE9', 'rise r2', 0));
   const offs = [];   // each person starts somewhere else in their own cycle
-  const own = (name, role) => { offs.push(`.p-${name},.m-${name},.s-${name},.f-${name},.w-${name},.a-${name}{animation-delay:-${Math.round((NOW_S + rnd() * CYC(role)) % CYC(role))}s}`); return name; };
+  const own = (name) => { offs.push(`.p-${name},.m-${name},.s-${name},.f-${name},.w-${name},.a-${name}{animation-delay:-${Math.round(NOW_S % ALL_S)}s}`); return name; };
 
   if (bossMode === 'idle' && st0.lite2) mid += actor('boss', 211, 70, 'idle');
   else if (bossMode === 'idle') mid += walker('boss', own('bossIdle', 'boss'), routine('boss'), CYC('boss'), { home: HOME.boss, work: WORK, act: pick([ACT.coffee, ACT.phone]), emo: pick(['star', 'note']), emoDelay: 2, emoEvery: 5, mood: 'happy' });
@@ -349,8 +370,8 @@ export function officeSvg(A, s = {}) {
   }
   // ---------- ambience ----------
   if (!st0.lite) {
-    mid += rect(64, 148, 6, 2, '#E53935') + rect(65, 147, 4, 1, '#8D6E63');   // cat bowl
-    mid += G(G(G(img(S.cat, 0, 0, 18, 10), 'class="catf"'), 'class="catb2"') + G(`<text x="14" y="-1" font-family="Consolas" font-size="4" fill="#E3F2FD" stroke="#2A1E1E" stroke-width=".5" paint-order="stroke">z</text>`, 'class="catz"') + G(rect(-1, 6, 2, 1, '#FFCC80'), 'class="cateat"'), 'class="catp"');
+    back += rect(64, 148, 6, 2, '#E53935') + rect(65, 147, 4, 1, '#8D6E63');   // cat bowl (under the people)
+    back += G(G(G(img(S.cat, 0, 0, 18, 10), 'class="catf"'), 'class="catb2"') + G(`<text x="14" y="-1" font-family="Consolas" font-size="4" fill="#E3F2FD" stroke="#2A1E1E" stroke-width=".5" paint-order="stroke">z</text>`, 'class="catz"') + G(rect(-1, 6, 2, 1, '#FFCC80'), 'class="cateat"'), 'class="catp"');
   }
   under += G(rect(142, 9, 8, 3, '#FFFFFF') + rect(144, 8, 5, 1, '#FFFFFF'), 'class="cloud"');
   // real clock: hands set to the time the scene was built, then turning at real speed
@@ -401,7 +422,6 @@ export function officeSvg(A, s = {}) {
 .spark{animation:spark 1s steps(2) infinite}.s1{animation-delay:.5s}@keyframes spark{50%{opacity:0}}
 .steam{animation:steam 2.4s steps(6) infinite}@keyframes steam{0%{transform:translateY(0);opacity:.9}100%{transform:translateY(-6px);opacity:0}}
 .cloud{animation:cloud 28s linear infinite}@keyframes cloud{0%,100%{transform:translateX(-4px)}50%{transform:translateX(12px)}}
-.tick{animation:tick 6s steps(6) infinite;transform-origin:76.5px 15.5px}@keyframes tick{100%{transform:rotate(360deg)}}
 .stand{opacity:0}
 .q{animation-duration:.18s}
 .bobq{animation:bob .2s steps(1) infinite}
@@ -416,8 +436,8 @@ export function officeSvg(A, s = {}) {
 .chk{animation:chk 5s steps(1) infinite}.c1{animation-delay:.8s}.c2{animation-delay:1.6s}.c3{animation-delay:2.4s}.c4{animation-delay:3.2s}@keyframes chk{0%{opacity:0}15%,90%{opacity:1}}
 .sipc{animation:sipc 3s steps(1) infinite}@keyframes sipc{0%,60%{transform:none}62%,85%{transform:translate(-3px,-5px)}}
 .chop{animation:chop .6s steps(1) infinite}@keyframes chop{50%{transform:translateY(-3px)}}
-.flip{animation:flip .5s steps(2) infinite;transform-box:fill-box;transform-origin:center bottom}@keyframes flip{50%{transform:scaleY(-1) translateY(2px)}}
-.money{animation:mny 12s step-end infinite}.phoneb{opacity:0;animation:phn 12s step-end infinite}@keyframes mny{0%{opacity:1}55%{opacity:0}}@keyframes phn{0%{opacity:0}55%{opacity:1}}
+
+
 .catp{animation:catp 120s linear infinite}@keyframes catp{0%{transform:translate(132px,140px)}10%,33%{transform:translate(100px,140px)}40%,52%{transform:translate(66px,140px)}64%,90%{transform:translate(196px,140px)}100%{transform:translate(132px,140px)}}
 .catf{animation:catf 120s step-end infinite}@keyframes catf{0%{transform:matrix(-1,0,0,1,18,0)}52%{transform:none}90%{transform:matrix(-1,0,0,1,18,0)}}
 .catb2{animation:catb 120s step-end infinite}@keyframes catb{0%{animation-timing-function:step-end}}
@@ -434,7 +454,6 @@ export function officeSvg(A, s = {}) {
 .prn{animation:prn 7s steps(6) infinite}@keyframes prn{0%,60%{transform:none;opacity:0}62%{opacity:1}90%{transform:translateY(6px);opacity:1}100%{transform:translateY(6px);opacity:0}}
 .bub{animation:bub 2.4s linear infinite}.b1{animation-delay:.8s}.b2{animation-delay:1.6s}@keyframes bub{0%{transform:none;opacity:0}20%{opacity:.9}100%{transform:translateY(-9px);opacity:0}}
 .twk{animation:twk 2.2s steps(1) infinite}.w1{animation-delay:.7s}.w2{animation-delay:1.4s}@keyframes twk{50%{opacity:.2}}
-.lamp{animation:lmp 4s ease-in-out infinite}@keyframes lmp{50%{opacity:.22}}
 .cheer{animation:chr 6s ease-out 1 forwards}@keyframes chr{0%{opacity:0;transform:translateY(4px)}10%{opacity:1;transform:none}80%{opacity:1}100%{opacity:0}}` + pathCss + breakCss0 + offs.join('');   // after the walkers: their animation shorthand would reset the delay
   const open = (px) => `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" shape-rendering="crispEdges" width="${px}" height="${px}">`;
   const defs = () => '<defs>' + A.pats.map((p) => `<pattern id="${p.id}" x="${p.x}" y="${p.y}" width="${p.w}" height="${p.h}" patternUnits="userSpaceOnUse">${p.svg}</pattern>`).join('')
