@@ -19,6 +19,11 @@ export type Film = {
   render?: number
   plan?: number
   research?: number
+  /** finish time estimated by the job itself (ms); shown smoothed */
+  finishAt?: number
+  /** last file the job touched (heartbeat) */
+  activity?: string
+  beat?: number
   /** seconds left in the current step */
   eta?: number | null
   blocked?: boolean

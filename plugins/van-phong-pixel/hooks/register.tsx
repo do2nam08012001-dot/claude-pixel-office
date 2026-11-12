@@ -24,6 +24,7 @@ const owned = atom({ plugin: 'van-phong-pixel', key: 'owned' } as const, [] as O
 // jobs of other sessions shown in the "other jobs" strip (not followed here)
 const others = atom({ plugin: 'van-phong-pixel', key: 'others' } as const, [] as Film[], { shape: 'films-3' })
 let busy = false, again = false, cwdSkill: string | undefined
+const finish = new Map<string, number>()   // slug -> finish time shown (ms)
 const openOthers = atom({ plugin: 'van-phong-pixel', key: 'openOthers' } as const, false)
 let lastScrolled = ''
 // step changes the pane has noticed: slug -> { step, from, to, at }; the hand-off walk plays from the moment it is noticed
@@ -107,6 +108,14 @@ function view(f: Film, now: number): View {
     return { ...s, state: 'wait', guess, w: guess ?? 60 }
   })
   if (allDone) remaining = 0
+  // the job's own estimate (Claude in the cloud, smoothed): finish time and total % follow it, no guessing here
+  const fin = finish.get(f.slug)
+  if (fin && !allDone) {
+    remaining = Math.max(60, (fin - now) / 1000); known = true; over = false
+    const starts = Object.values(h).map(x => x?.start).filter((x): x is number => typeof x === 'number')
+    const begun = starts.length ? Math.min(...starts) : null
+    if (begun) { const spentJob = (now - begun) / 1000; return { over, steps: sv, idx, allDone, progress, frac, scene, total: Math.min(0.99, spentJob / (spentJob + remaining)), remaining, known } }
+  }
   // progress per second of the current step, so the HP bar above the worker grows smoothly between refreshes
   const curV = sv.find(s => s.state === 'now')
   if (curV && curV.left && curV.left > 0) scene = { ...scene, rate: (1 - progress) / curV.left }
@@ -208,6 +217,14 @@ async function refreshInner($: any) {
   const mine = (await read($, owned)) ?? []
   const list: Film[] = mine.map(m => all.find(f => f.slug === m.slug)
     ?? { slug: m.slug, title: m.title || m.slug, skill: m.skill, stage: 'inputs', message: 'Đang tải dữ liệu lên Drive…', updated: m.at, source: 'drive', history: { inputs: { start: m.at } } } as Film)
+  for (const f of list) {
+    const target = typeof (f as any).finishAt === 'number' ? (f as any).finishAt as number : null
+    if (!target || isDone(f)) { finish.delete(f.slug); continue }
+    const cur = finish.get(f.slug), nowT = Date.now()
+    if (!cur) { finish.set(f.slug, target); continue }
+    const cap = Math.max(120_000, 0.1 * Math.max(0, cur - nowT))
+    finish.set(f.slug, cur + Math.max(-cap, Math.min(cap, target - cur)))
+  }
   // finished jobs leave on their own; other sessions' finished jobs are not shown at all
   const gone = list.filter(f => isDone(f) && Date.now() - f.updated > DONE_KEEP).map(f => f.slug)
   if (gone.length) await update($, owned, (o: Owned[]) => (o ?? []).filter(x => !gone.includes(x.slug)))
