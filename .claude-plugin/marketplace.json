@@ -1,0 +1,11 @@
+{
+  "name": "van-phong",
+  "owner": { "name": "jp-studio" },
+  "plugins": [
+    {
+      "name": "van-phong-pixel",
+      "source": "./plugins/van-phong-pixel",
+      "description": "Ô Văn phòng pixel: tiến độ, thời gian còn lại, lỗi và việc chờ duyệt của các phiên làm video trên cloud (đọc từ Google Drive mỗi 30 giây)."
+    }
+  ]
+}

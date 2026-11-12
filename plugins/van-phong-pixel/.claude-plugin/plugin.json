@@ -1,0 +1,7 @@
+{
+  "name": "van-phong-pixel",
+  "version": "0.1.0",
+  "description": "Pixel-office pane: shows the live progress, ETA, errors and approvals of the jp video cloud sessions (read from Google Drive every 30 s).",
+  "types": "./types/index.d.ts",
+  "license": "MIT"
+}
