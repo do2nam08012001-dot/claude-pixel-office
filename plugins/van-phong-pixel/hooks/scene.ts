@@ -172,6 +172,7 @@ export function officeSvg(A, s = {}) {
   if (done) top += bubble('ok', 223, 50) + G([['#FFD54F', 180], ['#FF8A80', 196], ['#81D4FA', 214], ['#A5D6A7', 232], ['#CE93D8', 248], ['#FFD54F', 120], ['#FF8A80', 60], ['#81D4FA', 20]].map(([c, x], i) => rect(x, 0, 2, 3, c, `conf k${i % 4}`)).join(''))
     + G([[200, 60], [238, 64], [206, 96], [244, 92]].map(([x, y], i) => `<path d="M${x} ${y - 3}v6M${x - 3} ${y}h6" stroke="#FFF59D" stroke-width="1" class="spark s${i % 2}"/>`).join(''));
   back += tag(224, 112, 'Chủ tịch', st.approval || done, '#7A4A2E');
+  const BREAK = 48;   // shared idle cycle (s): everyone on break meets on the same beat
   const P = Math.max(0, Math.min(1, st0.progress ?? 0)), hand = st0.handoff && !st0.allDone ? st0.handoff : null;
   const skip = (role) => hand && hand.from === role;
   const H = hand ? handoff(hand.from, hand.to) : null;
@@ -179,7 +180,7 @@ export function officeSvg(A, s = {}) {
   // ---------- plan ----------
   const opusOn = at('plan') || (at('research') && st.bench === 'all-opus');
   if (opusOn) { mid += late('plan', frantic('opus', 36, 78, P, err), actor('opus', 36, 78, 'happy')); top += gear(28, 70); under += workGlow(0, 44, 84, 84); }
-  else if (!skip('plan')) mid += walker('opus', 'opusIdle', [[0, 36, 70], [15, 36, 70], [32, 46, 52], [70, 46, 52], [86, 36, 70], [100, 36, 70]], 16, { act: ACT.coffee, emo: 'heart', emoDelay: 1, mood: done || past('plan') ? 'happy' : '' });
+  else if (!skip('plan')) walk += walker('opus', 'opusIdle', [[0, 36, 70], [18, 36, 70], [24, 80, 70], [29, 80, 128], [33, 94, 128], [66, 94, 128], [70, 80, 128], [75, 80, 70], [81, 36, 70], [100, 36, 70]], BREAK, { act: ACT.coffee, emo: 'note', emoDelay: 0, emoEvery: 4, mood: 'happy' });
   front += screen(21, 82, 16, 9, opusOn, err ? 'err' : 'ok') + screen(53, 82, 16, 9, opusOn, err ? 'err' : 'ok');
   if (opusOn && !err) top += glyphs(24, 80, '#D1C4E9') + glyphs(56, 80, '#D1C4E9');
   for (let i = 0; i < 4; i++) back += rect(26, 9 + i * 3, Math.round(Math.max(0, Math.min(1, st.plan * 4 - i)) * 30), 1.5, '#7E57C2');
@@ -188,7 +189,7 @@ export function officeSvg(A, s = {}) {
   // ---------- research ----------
   const res = at('research');
   if (res) { mid += late('research', walker('sonnet', 'res', [[0, 124, 52], [8, 124, 52], [30, 100, 42], [60, 100, 42], [86, 124, 52], [100, 124, 52]], 6, { carry: G(img(S.book, 12, 11, 6, 6), 'class="book"'), mood: err ? 'worried' : 'red', rush: true, hp: P, bad: err }), actor('sonnet', 124, 52, 'happy', true)); under += workGlow(88, 44, 82, 84); if (!err) top += glyphs(140, 80) + gear(150, 74); }
-  else if (!skip('research')) mid += walker('sonnet', 'sonIdle', [[0, 118, 70], [14, 118, 70], [34, 148, 58], [74, 148, 58], [90, 118, 70], [100, 118, 70]], 18, { act: ACT.view, emo: 'note', emoDelay: 2.5, mood: 'happy' });
+  else if (!skip('research')) walk += walker('sonnet', 'sonIdle', [[0, 118, 70], [18, 118, 70], [24, 162, 70], [29, 162, 128], [34, 112, 128], [66, 112, 128], [71, 162, 128], [76, 162, 70], [82, 118, 70], [100, 118, 70]], BREAK, { act: ACT.view, emo: 'dots', emoDelay: 2, emoEvery: 4, mood: 'happy' });
   front += screen(137, 82, 16, 9, res, err ? 'err' : 'ok');
   back += rect(92, 66, Math.round(42 * (past('research') ? 1 : res ? st.research : 0)), 1.5, '#26A69A');
   if (res && err) { top += bubble('err', 126, 26); under += zoneAlarm(88, 44, 82, 84); }
@@ -198,7 +199,7 @@ export function officeSvg(A, s = {}) {
   for (const x0 of [4, 26]) for (let j = 0; j < 8; j++) back += rect(x0 + 3, 180 + j * 6, 1.5, 1.5, rOn ? (err && j % 3 === 0 ? '#FF5252' : '#69F0AE') : '#33404C', rOn ? `led l${(j + x0) % 3}` : '') + rect(x0 + 6, 180 + j * 6, 1.5, 1.5, rOn ? '#FFD54F' : '#33404C', rOn ? `led l${(j + x0 + 1) % 3}` : '');
   back += rect(4, 229.5, 42, 3, '#10161B') + rect(5, 230.5, Math.round(40 * rp), 1, err && rOn ? '#FF5252' : '#69F0AE');
   if (rOn) { mid += late('build', frantic('tech', 58, 186, P, err), actor('tech', 58, 186, 'happy', true)); under += workGlow(0, 168, 84, 88); if (!err) top += gear(50, 180) + [8, 18, 30, 40].map((x, i) => rect(x, 170, 1, 3, '#B3E5FC', `heat h${i % 3}`, 0)).join(''); }
-  else if (!skip('build')) walk += walker('tech', 'techIdle', [[0, 20, 206], [16, 20, 206], [34, 58, 206], [80, 58, 206], [94, 20, 206], [100, 20, 206]], 18, { act: ACT.game, emo: 'star', emoDelay: 0.5, mood: 'happy' });
+  else if (!skip('build')) walk += walker('tech', 'techIdle', [[0, 20, 206], [2, 33, 206], [6, 33, 130], [14, 121, 130], [18, 121, 194], [19, 124, 194], [74, 124, 194], [75, 121, 194], [79, 121, 130], [87, 33, 130], [91, 33, 206], [93, 20, 206], [100, 20, 206]], BREAK, { act: ACT.game, emo: 'star', emoDelay: 1, emoEvery: 5, mood: 'happy' });
   front += screen(56, 197, 14, 8, rOn, err ? 'err' : 'ok');
   if (rOn && !err) top += glyphs(58, 196);
   if (rOn && err) { top += bubble('err', 70, 160); under += zoneAlarm(0, 168, 84, 88); }
@@ -206,7 +207,7 @@ export function officeSvg(A, s = {}) {
   // ---------- check ----------
   const qOn = at('qa');
   if (qOn) { mid += late('check', walker('qa', 'qa', [[0, 126, 188], [8, 126, 188], [34, 102, 188], [64, 102, 188], [90, 126, 188], [100, 126, 188]], 6, { carry: img(S.clip, -3, 11, 6, 8), mood: err ? 'worried' : 'red', rush: true, hp: P, bad: err }), actor('qa', 126, 188, 'happy', true)); under += workGlow(88, 168, 80, 88); if (!err) top += [0, 1, 2, 3, 4].map(i => rect(98, 177 + i * 3, 2, 2, '#43A047', `chk c${i}`, 0)).join(''); }
-  else if (!skip('check')) mid += walker('qa', 'qaIdle', [[0, 124, 190], [14, 124, 190], [34, 146, 196], [80, 146, 196], [94, 124, 190], [100, 124, 190]], 18, { act: ACT.noodles, emo: 'heart', emoDelay: 3, mood: 'happy' });
+  else if (!skip('check')) mid += walker('qa', 'qaIdle', [[0, 146, 196], [30, 146, 196], [34, 150, 194], [60, 150, 194], [64, 146, 196], [100, 146, 196]], BREAK, { act: ACT.noodles, emo: 'heart', emoDelay: 3, emoEvery: 4, mood: 'happy' });
   front += screen(109, 206, 16, 9, qOn, err ? 'err' : 'ok') + screen(139, 206, 16, 9, qOn, err ? 'err' : 'ok');
   if (qOn && err) { top += bubble('err', 112, 160); under += zoneAlarm(88, 168, 80, 88); }
   back += tag(106, 247, cut(L.check, 16), qOn, '#2E7D32');
@@ -214,7 +215,7 @@ export function officeSvg(A, s = {}) {
   const fetch = at('inputs'), deliver = at('deliver');
   if (fetch) { walk += walker('courier', 'fetch', [[0, 190, 196], [5, 207, 196], [17, 207, 130], [40, 80, 130], [46, 80, 100], [56, 80, 100], [62, 80, 130], [85, 207, 130], [96, 207, 196], [100, 190, 196]], 12, { carry: img(S.crate, -5, 11, 10, 9), mood: err ? 'worried' : 'red', rush: true, hp: P, bad: err }); under += workGlow(172, 168, 84, 88); }
   else if (deliver) { walk += late('deliver', walker('courier', 'deliver', [[0, 190, 196], [8, 207, 196], [26, 207, 130], [36, 208, 100], [58, 208, 100], [68, 207, 130], [90, 207, 196], [100, 190, 196]], 9, { carry: img(S.reel, -5, 10, 10, 10), mood: err ? 'worried' : 'happy', rush: true, hp: P, bad: err }), actor('courier', 190, 196, 'happy', true)); under += workGlow(172, 44, 84, 84); }
-  else if (!skip('fetch') && !skip('deliver')) walk += walker('courier', 'courIdle', [[0, 188, 196], [14, 188, 196], [34, 214, 200], [80, 214, 200], [94, 188, 196], [100, 188, 196]], 17, { act: ACT.phone, emo: 'dots', emoDelay: 1.5, mood: done ? 'happy' : '' });
+  else if (!skip('fetch') && !skip('deliver')) walk += walker('courier', 'courIdle', [[0, 188, 196], [40, 188, 196], [43, 207, 196], [48, 207, 130], [51, 208, 100], [64, 208, 100], [67, 207, 130], [72, 207, 196], [75, 188, 196], [100, 188, 196]], BREAK, { act: ACT.phone, emo: 'star', emoDelay: 1.5, emoEvery: 4, mood: 'happy' });
   if ((fetch || deliver) && err) { top += bubble('err', 214, 162); under += zoneAlarm(172, 168, 84, 88); }
   back += tag(176, 247, cut(deliver ? L.deliver : L.fetch, 15), fetch || deliver, '#8D6234');
   // ---------- ambience ----------

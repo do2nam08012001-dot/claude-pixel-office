@@ -3,14 +3,15 @@ import type { Register } from 'claude-code'
 import type { Film, Owned, Poll, Role, Step } from '../types'
 import { ASSETS } from './assets'
 import { officeSvg, legacy } from './scene'
-import { cardSvg, headerSvg, doneShelfSvg } from './cards'
+import { cardSvg, headerSvg } from './cards'
 import type { CardStep } from './cards'
 
 const PANE = 'van-phong'
 const ROW = 'van-phong-row'
 const TITLE = 'Văn phòng'
-const POLL_MS = 10_000          // local status files
-const DRIVE_EVERY = 1           // Drive on every poll (10 s): the origin session follows cloud jobs live
+const POLL_MS = 5_000           // this session's jobs (local files + their Drive status, read directly)
+const SCAN_EVERY = 6            // full Drive scan (jobs of other sessions) every 6th poll (30 s)
+const DONE_KEEP = 10 * 60_000    // a finished job leaves the office 10 minutes after it is done
 const HANDOFF_MS = 25_000       // how long a noticed step change plays the hand-off walk
 const STALE_MS = 15 * 60_000
 const SVG_LIMIT = 130_500
@@ -22,7 +23,8 @@ const focus = atom({ plugin: 'van-phong-pixel', key: 'focus' } as const, '')
 const owned = atom({ plugin: 'van-phong-pixel', key: 'owned' } as const, [] as Owned[])
 // jobs of other sessions shown in the "other jobs" strip (not followed here)
 const others = atom({ plugin: 'van-phong-pixel', key: 'others' } as const, [] as Film[], { shape: 'films-3' })
-let busy = false, again = false
+let busy = false, again = false, cwdSkill: string | undefined
+const openOthers = atom({ plugin: 'van-phong-pixel', key: 'openOthers' } as const, false)
 let lastScrolled = ''
 // step changes the pane has noticed: slug -> { step, from, to, at }; the hand-off walk plays from the moment it is noticed
 const seen = new Map<string, { step: string; from?: string; to?: string; at: number }>()
@@ -64,7 +66,7 @@ function view(f: Film, now: number): View {
     steps = VIDEO_STEPS
     const map: Record<string, number> = { idle: -1, inputs: 0, research: 1, plan: 2, render: 3, qa: 4, deliver: 5, done: 6 }
     idx = map[f.stage ?? 'idle'] ?? -1; allDone = f.stage === 'done'
-    progress = f.stage === 'render' ? f.render ?? 0 : 0
+    progress = f.stage === 'render' ? f.render ?? 0 : Math.max(0, Math.min(1, f.progress ?? 0))   // inputs: upload %
     scene = legacy(f)
   }
   const h = f.history ?? {}
@@ -168,24 +170,39 @@ async function refreshInner($: any) {
       }
     } catch { /* no local folder */ }
   }
-  const useDrive = drive && ticks++ % DRIVE_EVERY === 0
-  if (useDrive) {
-    try {
-      const fresh: Film[] = []
-      const bin = await rclone($)
-      if (!bin) throw new Error('chưa cài rclone')
-      const r = await $.process.run([bin, 'cat', drive, '--include', '/*/status/*.json'], { timeoutMs: 25000 })
-      if (r.exitCode !== 0) throw new Error((r.stderr || 'rclone lỗi').split('\n').filter((l: string) => l && !l.includes('NOTICE')).slice(-1)[0] || 'rclone lỗi')
-      for (const o of objects(r.stdout)) if (o.slug) fresh.push({ ...o, source: 'drive' })
-      driveCache = fresh; driveError = ''   // swap only on success: a failed read keeps the last list
-    } catch (err: any) { driveError = `Drive: ${String(err?.message ?? err).slice(0, 120)}` }
+  const mine0 = (await read($, owned)) ?? []
+  const bin = drive ? await rclone($) : ''
+  if (drive && !bin) driveError = 'Drive: chưa cài rclone'
+  else if (drive) {
+    const fail = (r: any) => (r.stderr || 'rclone lỗi').split(/\r?\n/).filter((l: string) => l && !l.includes('NOTICE')).slice(-1)[0] || 'rclone lỗi'
+    if (ticks++ % SCAN_EVERY === 0 || mine0.some(m => !m.skill)) {
+      try {
+        const fresh: Film[] = []
+        const r = await $.process.run([bin, 'cat', drive, '--include', '/*/status/*.json'], { timeoutMs: 25000 })
+        if (r.exitCode !== 0) throw new Error(fail(r))
+        for (const o of objects(r.stdout)) if (o.slug) fresh.push({ ...o, source: 'drive' })
+        driveCache = fresh; driveError = ''   // swap only on success: a failed read keeps the last list
+      } catch (err: any) { driveError = `Drive: ${String(err?.message ?? err).slice(0, 120)}` }
+    } else {
+      // this session's jobs: one small file each, read in parallel (a few seconds at most)
+      const got = await Promise.all(mine0.map(async m => {
+        try { const r = await $.process.run([bin, 'cat', `${drive}/${m.skill}/status/${m.slug}.json`], { timeoutMs: 15000 }); return r.exitCode === 0 ? objects(r.stdout)[0] ?? null : null } catch { return null }
+      }))
+      for (const o of got) if (o?.slug) driveCache = [...driveCache.filter(x => x.slug !== o.slug), { ...o, source: 'drive' }]
+    }
+    // learn the skill (Drive folder) of a job claimed without one
+    for (const m of mine0) if (!m.skill) { const c = driveCache.find(x => x.slug === m.slug); if (c?.skill) await update($, owned, (o: Owned[]) => (o ?? []).map(x => x.slug === m.slug ? { ...x, skill: c.skill } : x)) }
   }
   if (drive) { for (const o of driveCache) if (!all.some(f => f.slug === o.slug)) all.push(o); if (driveError) errors.push(driveError) }
   // this session's jobs; one not on Drive yet shows at once as "uploading"
   const mine = (await read($, owned)) ?? []
   const list: Film[] = mine.map(m => all.find(f => f.slug === m.slug)
     ?? { slug: m.slug, title: m.title || m.slug, skill: m.skill, stage: 'inputs', message: 'Đang tải dữ liệu lên Drive…', updated: m.at, source: 'drive', history: { inputs: { start: m.at } } } as Film)
-  await update($, others, () => all.filter(f => !mine.some(m => m.slug === f.slug)).sort((a, b) => b.updated - a.updated))
+  // finished jobs leave on their own; other sessions' finished jobs are not shown at all
+  const gone = list.filter(f => isDone(f) && Date.now() - f.updated > DONE_KEEP).map(f => f.slug)
+  if (gone.length) await update($, owned, (o: Owned[]) => (o ?? []).filter(x => !gone.includes(x.slug)))
+  for (let i = list.length - 1; i >= 0; i--) if (gone.includes(list[i].slug)) list.splice(i, 1)
+  await update($, others, () => all.filter(f => !mine.some(m => m.slug === f.slug) && !isDone(f)).sort((a, b) => b.updated - a.updated))
   // notice step changes (the previous step's role hands the work to the new one)
   const nowMs = Date.now()
   for (const f of list) {
@@ -222,12 +239,16 @@ async function refreshInner($: any) {
 
 async function adopt($: any, f: Film) {
   await update($, owned, (m: Owned[]) => [...(m ?? []).filter(x => x.slug !== f.slug), { slug: f.slug, title: f.title || f.slug, skill: f.skill, at: Date.now() }])
+  await update($, films, (l: Film[]) => [f, ...(l ?? []).filter(x => x.slug !== f.slug)])
+  await update($, others, (l: Film[]) => (l ?? []).filter(x => x.slug !== f.slug))
   await update($, focus, () => f.slug); lastScrolled = ''
-  await refresh($)
+  void refresh($)
 }
 // stop following a job here; a job that went silent (or is done) also loses its status file on Drive, so no session shows it again
 async function drop($: any, f: Film, purge: boolean) {
   await update($, owned, (m: Owned[]) => (m ?? []).filter(x => x.slug !== f.slug))
+  await update($, films, (l: Film[]) => (l ?? []).filter(x => x.slug !== f.slug))
+  await update($, others, (l: Film[]) => (l ?? []).filter(x => x.slug !== f.slug))
   if (purge && f.source === 'drive' && f.skill) {
     try {
       const bin = await rclone($)
@@ -235,7 +256,7 @@ async function drop($: any, f: Film, purge: boolean) {
       driveCache = driveCache.filter(x => x.slug !== f.slug)
     } catch { /* offline: it just stays in the other list */ }
   }
-  await refresh($)
+  void refresh($)
 }
 // a Bash call of this session that sends a job: the job belongs to this session from that moment
 const SEND = /local\/send\.sh["']?\s+([a-z0-9][a-z0-9-]*)/, INIT = /office-status\.mjs["']?\s+init\s+["']?([A-Za-z0-9._-]+)/
@@ -243,7 +264,7 @@ const TITLE_RE = /--title\s+(?:"([^"]*)"|'([^']*)')/
 async function claim($: any, command: string) {
   const m = SEND.exec(command) ?? INIT.exec(command)
   if (!m) return
-  const tm = TITLE_RE.exec(command), skill = /repo-jp-explainer|explainer/.test(command) ? 'jp-explainer-video' : /history/.test(command) ? 'jp-history-video' : undefined
+  const tm = TITLE_RE.exec(command), skill = /explainer/.test(command) ? 'jp-explainer-video' : /history-video/.test(command) ? 'jp-history-video' : cwdSkill
   await update($, owned, (o: Owned[]) => (o ?? []).some(x => x.slug === m[1]) ? o : [...(o ?? []), { slug: m[1], title: tm ? tm[1] ?? tm[2] : m[1], skill, at: Date.now() }])
   await update($, focus, () => m[1]); lastScrolled = ''
   void refresh($)
@@ -256,6 +277,7 @@ async function drawOffice($: any, e: any) {
   const Svg = els.Svg
   const list = (await read($, films)) ?? []
   const other = (await read($, others)) ?? []
+  const showOthers = (await read($, openOthers)) ?? false
   const p = (await read($, poll)) ?? { at: 0, error: '' }
   const want = (await read($, focus)) ?? ''
   const now = Date.now()
@@ -316,17 +338,14 @@ async function drawOffice($: any, e: any) {
         </Box>
       ) : null}
       {list.length === 0 ? <Text dimColor>Phiên này chưa có việc nào. Việc bạn giao trong phiên này (gửi lên Drive / office-status init) sẽ hiện ở đây ngay.</Text> : null}
-      {active.map(card)}
-      {finished.length > 0 && Svg ? <Svg source={doneShelfSvg(W, finished.slice(0, 6).map(f => ({ title: f.title || f.slug, when: clock(f.updated) })))} alt={`Đã xong ${finished.length} việc`} /> : null}
-      {finished.length > 0 ? (
-        <Box flexDirection="row" gap={1} flexWrap="wrap">
-          {finished.slice(0, 6).map(f => <Button key={'xem-' + f.slug} label={`Xem ${[...(f.title || f.slug)].slice(0, 14).join('')}`} onPress={() => update($, focus, () => f.slug)} />)}
-        </Box>
-      ) : null}
+      {list.map(card)}
       {other.length > 0 ? (
         <Box key="khac" flexDirection="column">
-          <Text dimColor>Việc của phiên khác ({other.length}) — không tính vào văn phòng này:</Text>
-          {other.slice(0, 6).map(f => {
+          <Box flexDirection="row" justifyContent="space-between">
+            <Text dimColor>Việc của phiên khác đang chạy: {other.length}</Text>
+            <Button key="khac-mo" label={showOthers ? 'Ẩn' : 'Xem'} onPress={() => update($, openOthers, (v: boolean) => !v)} />
+          </Box>
+          {!showOthers ? null : other.slice(0, 6).map(f => {
             const k = isDone(f) ? 'xong' : now - f.updated > STALE_MS ? `im lặng ${dur((now - f.updated) / 1000)}` : 'đang chạy'
             return (
               <Box key={'o-' + f.slug} flexDirection="row" justifyContent="space-between" gap={1}>
@@ -341,7 +360,7 @@ async function drawOffice($: any, e: any) {
         </Box>
       ) : null}
       <Box flexDirection="row" justifyContent="space-between">
-        <Text dimColor>{p.error ? p.error : p.at ? `Cập nhật ${dur((now - p.at) / 1000)} trước · tự làm mới mỗi 10 giây (cả Drive)` : 'Đang đọc trạng thái…'}</Text>
+        <Text dimColor>{p.error ? p.error : p.at ? `Cập nhật ${dur((now - p.at) / 1000)} trước · tự làm mới mỗi 5 giây` : 'Đang đọc trạng thái…'}</Text>
         <Button key="lam-moi" label="Làm mới" onPress={() => { lastScrolled = ''; return refresh($) }} />
       </Box>
     </Box>
@@ -351,6 +370,8 @@ async function drawOffice($: any, e: any) {
 
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
+    const cwd = String((e as any).cwd ?? '')
+    cwdSkill = /explainer/.test(cwd) ? 'jp-explainer-video' : /history-video/.test(cwd) ? 'jp-history-video' : undefined
     await $.command.register({ name: 'vp', description: 'Mở ô văn phòng pixel: tiến độ, lỗi và việc chờ duyệt của các quy trình đang chạy' })
     void $.ui.open({ id: PANE, title: TITLE })
     void refresh($)
