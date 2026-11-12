@@ -108,20 +108,31 @@ function view(f: Film, now: number): View {
     return { ...s, state: 'wait', guess, w: guess ?? 60 }
   })
   if (allDone) remaining = 0
-  // the job's own estimate (Claude in the cloud, smoothed): finish time and total % follow it, no guessing here
+  // ONE share drives all three bars (total bar, the step's own bar, the HP bar over the worker)
+  const W = sv.reduce((a, s) => a + s.w, 0) || 1
+  const doneW = sv.reduce((a, s) => a + (s.state === 'done' ? s.w : 0), 0)
+  const cur = sv.find(s => s.state === 'now')
+  let total = (doneW + (cur ? cur.w * frac : 0)) / W
+  // the job's own estimate (Claude in the cloud, smoothed): finish time and total % follow it
   const fin = finish.get(f.slug)
   if (fin && !allDone) {
     remaining = Math.max(60, (fin - now) / 1000); known = true; over = false
     const starts = Object.values(h).map(x => x?.start).filter((x): x is number => typeof x === 'number')
     const begun = starts.length ? Math.min(...starts) : null
-    if (begun) { const spentJob = (now - begun) / 1000; return { over, steps: sv, idx, allDone, progress, frac, scene, total: Math.min(0.99, spentJob / (spentJob + remaining)), remaining, known } }
+    if (begun) {
+      const spentJob = (now - begun) / 1000
+      total = spentJob / (spentJob + remaining)
+      // the current step's share that makes the segmented bar show exactly this total
+      if (cur && cur.w > 0) frac = Math.max(0, Math.min(0.98, (total * W - doneW) / cur.w))
+      total = Math.max(total, doneW / W)
+    }
   }
-  // progress per second of the current step, so the HP bar above the worker grows smoothly between refreshes
-  const curV = sv.find(s => s.state === 'now')
-  if (curV && curV.left && curV.left > 0) scene = { ...scene, rate: (1 - progress) / curV.left }
-  // total % = finished step weights + the current step's share, over all weights (same weights as the bar segments)
-  const W = sv.reduce((a, s) => a + s.w, 0) || 1
-  const total = sv.reduce((a, s) => a + (s.state === 'done' ? s.w : s.state === 'now' ? s.w * frac : 0), 0) / W
+  // time left in the current step: its share of what is left overall (by weight), else its own estimate
+  const restW = (cur ? cur.w * (1 - frac) : 0) + sv.reduce((a, s) => a + (s.state === 'wait' ? s.w : 0), 0)
+  const curLeft = cur ? (fin && remaining && restW > 0 ? remaining * cur.w * (1 - frac) / restW : cur.left ?? 0) : 0
+  if (fin && cur && curLeft > 0) cur.left = curLeft   // the step row shows the same time left
+  // the HP bar starts at the same share and grows at the rate that reaches the end when the step should finish
+  scene = { ...scene, progress: frac, rate: curLeft > 0 ? (1 - frac) / curLeft : 0 }
   return { over, steps: sv, idx, allDone, progress, frac, scene, total: allDone ? 1 : Math.min(0.99, total), remaining: known ? remaining : null, known }
 }
 
@@ -315,7 +326,8 @@ async function drawOffice($: any, e: any) {
   const errs = list.filter(f => f.blocked).length, waits = list.filter(f => f.approval && !f.blocked).length
   const sceneState = shown ? view(shown, now).scene : { active: null, doneRoles: [] }
   // progress is animated inside the SVG (HP bars run at the real rate), so only visible state changes redraw it
-  const key = JSON.stringify({ ...sceneState, progress: undefined, rate: undefined, handoffAge: undefined, px })
+  // the HP bar is redrawn every 5 % (it animates smoothly in between), other visible changes redraw at once
+  const key = JSON.stringify({ ...sceneState, progress: Math.round((sceneState.progress ?? 0) * 20), rate: undefined, handoffAge: undefined, px })
   if (key !== sceneKey) {
     sceneKey = key
     sceneSvg = officeSvg(ASSETS, sceneState).full(px)
