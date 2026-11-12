@@ -175,6 +175,7 @@ const EXPR = {
   worried: { 6: '.OHSEESSSSEESHO.', 10: '..OSSSMSMSSSSO..' },
   focus: { 7: '.OSSOOSSSSOOSSO.' },
   sleepy: { 7: '.OSSSSSSSSSSSSO.', 8: '.OSSEESSSSEESSO.', 10: '..OSSSSMSSSSSO..' },
+  red: { 6: '.OHSEESSSSEESHO.', 7: '.OSSOOSSSSOOSSO.', 8: '.OSSWESSSSWESSO.', 9: '.ORRRSSSSSSRRRO.', 10: '..ORSMMMMMMSRO..' },
 };
 const LEGS = {
   a: ['...OPPPPPPPPO...', '..OPPPO.OPPPO...', '..OPPO...OPPO...', '.OBBBO...OBBBO..', '.OOOO.....OOOO..'],
@@ -191,10 +192,11 @@ function frame(o, c) {
   if (c.beard) { m[10] = '..OSHHMMHHSSO...'.slice(0, 16); m[11] = '...OOHHHHHHOO...'; }
   if (o.legs) m.splice(19, 5, ...LEGS[o.legs]);
   if (o.type) for (const [r, v] of Object.entries(TYPE[o.type])) m[r] = v;
+  if (o.grab) { for (const r of [1, 2]) m[r] = 'SS' + m[r].slice(2, 14) + 'SS'; for (let r = 3; r <= 11; r++) m[r] = 'OL' + m[r].slice(2, 14) + 'cO'; m[16] = '.OCLCCCTTCCCcCO.'; m[17] = '..OCCCCCCCCCCO..'; }
   if (o.wave) { m[13] = m[13].slice(0, 13) + 'OSO'; m[14] = m[14].slice(0, 14) + 'SO'; m[15] = m[15].slice(0, 14) + 'LO'; m[16] = m[16].slice(0, 13) + 'OO.'; m[12] = m[12].slice(0, 13) + 'OSO'; }
   return m.map(r => (r + '................').slice(0, 16));
 }
-const pal = (c) => ({ O: '#2A1E1E', H: c.hair, h: c.hairD, S: '#F7CDAE', s: '#E3A884', r: '#F4A6A6', E: '#2A1E1E', W: '#FFFFFF', M: '#B5655A', G: '#2A1E1E',
+const pal = (c) => ({ O: '#2A1E1E', H: c.hair, h: c.hairD, S: '#F7CDAE', s: '#E3A884', r: '#F4A6A6', R: '#E04B3A', E: '#2A1E1E', W: '#FFFFFF', M: '#B5655A', G: '#2A1E1E',
   C: c.shirt, c: c.shirtD, L: c.shirtL, T: c.tie, P: c.pants || '#34405A', B: '#3A2A22' });
 const CAST = {
   boss: { hair: '#4E342E', hairD: '#2A1A17', shirt: '#2C3E57', shirtD: '#1E2B3D', shirtL: '#3D5475', tie: '#F5B800', style: 3, glasses: true },
@@ -214,6 +216,7 @@ for (const [k, c] of Object.entries(CAST)) {
   s.walkAL = mk({ legs: 'a', expr: 'focus' }, 1); s.walkBL = mk({ legs: 'b', expr: 'focus' }, 1);
   s.type1 = mk({ type: 1, expr: 'focus' }); s.type2 = mk({ type: 2, expr: 'focus' });
   s.typeW1 = mk({ type: 1, expr: 'worried' }); s.typeW2 = mk({ type: 2, expr: 'worried' });
+  s.red1 = mk({ type: 1, expr: 'red' }); s.red2 = mk({ type: 2, expr: 'red' }); s.grab = mk({ grab: 1, expr: 'red' });
   s.wave1 = mk({ expr: 'happy' }); s.wave2 = mk({ wave: 1, expr: 'happy' });
   sprites[k] = s;
 }

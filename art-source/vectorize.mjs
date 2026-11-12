@@ -14,7 +14,7 @@ export function toPaths(pix, { quant = 0 } = {}) {
     let rh = 1; outer: while (y + rh < h) { for (let k = 0; k < rw; k++) { const j = (y + rh) * w + x + k; if (key[j] !== c || used[j]) break outer; } rh++; }
     for (let yy = 0; yy < rh; yy++) for (let k = 0; k < rw; k++) used[(y + yy) * w + x + k] = 1;
     if (!byColor.has(c)) byColor.set(c, []);
-    byColor.get(c).push(`M${x} ${y}h${rw}v${rh}h-${rw}z`);
+    byColor.get(c).push(`M${x} ${y}h${rw}v${rh}h-${rw}`);
   }
   let out = '';
   for (const [c, parts] of byColor) out += `<path fill="${shortHex(c)}" d="${parts.join('')}"/>`;

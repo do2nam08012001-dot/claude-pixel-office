@@ -72,7 +72,7 @@ The file format is in [plugins/van-phong-pixel/README.md](plugins/van-phong-pixe
 ## Editing the art
 
 The scene is pure SVG paths with CSS animation (no images, no script). Source in `art-source/`: change `build3.mjs`
-or `scene5.mjs`, run `node art-source/build3.mjs`, then put `assets3.json` into `plugins/van-phong-pixel/hooks/assets.ts`
-and `scene5.mjs` into `hooks/scene.ts`.
+or `scene6.mjs`, run `node art-source/build3.mjs`, then put `assets3.json` into `plugins/van-phong-pixel/hooks/assets.ts`
+and `scene6.mjs` into `hooks/scene.ts`.
 
 License: MIT.

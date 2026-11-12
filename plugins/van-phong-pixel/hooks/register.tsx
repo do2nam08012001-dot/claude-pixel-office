@@ -3,6 +3,8 @@ import type { Register } from 'claude-code'
 import type { Film, Poll, Role, Step } from '../types'
 import { ASSETS } from './assets'
 import { officeSvg, legacy } from './scene'
+import { cardSvg, headerSvg, doneShelfSvg } from './cards'
+import type { CardStep } from './cards'
 
 const PANE = 'van-phong'
 const TITLE = 'Văn phòng'
@@ -49,6 +51,9 @@ function view(f: Film, now: number): View {
     scene = legacy(f)
   }
   const h = f.history ?? {}
+  // a step that started in the last 40 s: the previous step's employee carries the work to the next room
+  const cur0 = idx > 0 && idx < steps.length ? steps[idx] : null
+  if (cur0 && h[cur0.id]?.start && now - h[cur0.id].start < 40_000) scene = { ...scene, handoff: { from: steps[idx - 1].role, to: cur0.role } }
   const tooks = steps.map(s => (h[s.id]?.start && h[s.id]?.end ? (h[s.id].end! - h[s.id].start) / 1000 : undefined))
   const doneT = tooks.filter((x): x is number => typeof x === 'number')
   const avg = doneT.length ? doneT.reduce((a, b) => a + b, 0) / doneT.length : null
@@ -196,72 +201,41 @@ export const register: Register = on => {
     let scene = officeSvg(ASSETS, sceneState).full(px)
     if (scene.length > SVG_LIMIT) scene = officeSvg(ASSETS, { ...sceneState, lite: true }).full(px)
 
-    const status = (f: Film) => f.blocked ? { t: 'Lỗi', c: 'red' } : f.approval ? { t: 'Chờ duyệt', c: 'yellow' } : isDone(f) ? { t: 'Xong', c: 'green' } : now - f.updated > STALE_MS ? { t: 'Im lặng', c: 'yellow' } : { t: 'Đang làm', c: 'cyan' }
+    const kindOf = (f: Film) => (f.blocked ? 'err' : f.approval ? 'wait' : isDone(f) ? 'done' : now - f.updated > STALE_MS ? 'stale' : 'run') as 'err' | 'wait' | 'done' | 'stale' | 'run'
+    const KIND_T = { err: 'LỖI', wait: 'CHỜ DUYỆT', done: 'XONG', stale: 'IM LẶNG', run: 'ĐANG LÀM' }
+    const W = Math.max(240, px)
     const card = (f: Film) => {
-      const v = view(f, now), s = status(f), focused = f.slug === shown?.slug
+      const v = view(f, now), kind = kindOf(f), focused = f.slug === shown?.slug
       const group = GROUP_VI[f.group ?? f.skill ?? ''] ?? f.group ?? f.skill ?? ''
-      const eta = v.allDone ? 'đã xong' : v.remaining == null ? 'chưa ước lượng được thời gian còn lại' : `còn ~${dur(v.remaining)} · xong khoảng ${clock(now + v.remaining * 1000)}`
+      const etaText = v.allDone ? 'đã xong' : v.remaining == null ? 'chưa đủ dữ liệu để ước lượng' : `còn ~${dur(v.remaining)} · xong ~${clock(now + v.remaining * 1000)}`
+      const steps: CardStep[] = v.steps.map(s => ({
+        label: s.label, role: s.role, state: s.state, w: s.took ?? s.est ?? s.guess ?? s.left ?? 1,
+        took: s.took ? dur(s.took) : undefined, elapsed: s.elapsed ? dur(s.elapsed) : undefined,
+        left: s.left != null ? `~${dur(s.left)}` : undefined, guess: s.guess != null ? dur(s.guess) : undefined,
+      }))
+      const stale = kind === 'stale' ? `Không cập nhật ${dur((now - f.updated) / 1000)}: có thể đã dừng.` : ''
+      const message = f.blocked || f.approval ? (f.message || (f.blocked ? 'Công việc báo bị vướng.' : 'Công việc chờ bạn trả lời.')) : stale
+      const reply = f.blocked || f.approval ? (f.source === 'drive' ? 'Trả lời trong phiên cloud của việc này.' : 'Trả lời trong phiên đang chạy việc này.') : stale ? 'Mở phiên đang chạy việc này để kiểm tra.' : ''
+      const svg = cardSvg({ title: f.title || f.slug, group, status: { t: KIND_T[kind], kind }, total: v.total, etaText, steps, progress: v.progress, message, reply, updatedText: `cập nhật ${dur((now - f.updated) / 1000)} trước`, focused }, W)
       return (
-        <Box key={`job-${f.slug}`} flexDirection="column" borderStyle="round" borderColor={focused ? 'cyan' : 'gray'} paddingX={1}>
-          <Box flexDirection="row" justifyContent="space-between">
-            <Text bold>{f.title || f.slug}</Text>
-            <Box flexDirection="row" gap={1}>
-              <Text color={s.c}>● {s.t}</Text>
-              {!focused && <Button key={'xem-' + f.slug} label="Xem" onPress={() => update($, focus, () => f.slug)} />}
-            </Box>
-          </Box>
-          {group ? <Text dimColor>{group} · {v.steps.length} bước · cập nhật {dur((now - f.updated) / 1000)} trước</Text> : null}
-          {Svg ? <Svg source={overallBar(v, f.blocked, Math.max(120, px - 24))} alt={`Tổng ${Math.round(v.total * 100)}%`} width={Math.max(120, px - 24)} height={12} /> : null}
-          <Text>Tổng <Text bold>{Math.round(v.total * 100)}%</Text> · {eta}</Text>
-          {v.steps.map((st, i) => {
-            const icon = st.state === 'done' ? '✓' : st.state === 'now' ? (f.blocked ? '!' : f.approval ? '?' : '▶') : '○'
-            const color = st.state === 'done' ? 'green' : st.state === 'now' ? (f.blocked ? 'red' : f.approval ? 'yellow' : 'cyan') : undefined
-            const right = st.state === 'done' ? (st.took ? dur(st.took) : 'xong')
-              : st.state === 'now' ? `${st.elapsed ? `đang ${dur(st.elapsed)}` : 'đang làm'}${st.left != null ? ` · còn ~${dur(st.left)}` : ''}`
-              : st.guess != null ? `~${dur(st.guess)}` : ''
-            return (
-              <Box key={st.state === 'now' ? `cur-${f.slug}` : `s-${f.slug}-${i}`} flexDirection="column">
-                <Box flexDirection="row" justifyContent="space-between">
-                  <Text color={color} dimColor={st.state === 'wait'} bold={st.state === 'now'}>{icon} {i + 1}. {st.label}</Text>
-                  <Text dimColor={st.state !== 'now'} color={st.state === 'now' ? color : undefined}>{right}</Text>
-                </Box>
-                {st.state === 'now' && Svg && v.progress > 0 ? <Svg source={miniBar(v.progress, Math.max(100, px - 40), f.blocked ? '#E53935' : '#3B82F6')} alt={`${Math.round(v.progress * 100)}%`} width={Math.max(100, px - 40)} height={6} /> : null}
-                {st.state === 'now' && (f.blocked || f.approval) ? (
-                  <Box flexDirection="column" paddingLeft={2}>
-                    <Text color={f.blocked ? 'red' : 'yellow'}>{f.message || (f.blocked ? 'Công việc báo bị vướng.' : 'Công việc chờ bạn trả lời.')}</Text>
-                    <Text dimColor>{f.source === 'drive' ? 'Trả lời trong phiên cloud của việc này.' : 'Trả lời trong phiên đang chạy việc này.'}</Text>
-                  </Box>
-                ) : null}
-              </Box>
-            )
-          })}
-          {now - f.updated > STALE_MS && !v.allDone ? <Text color="yellow">Không cập nhật {dur((now - f.updated) / 1000)}: công việc có thể đã dừng.</Text> : null}
+        <Box key={v.allDone ? `job-${f.slug}` : `cur-${f.slug}`} flexDirection="column">
+          {Svg ? <Svg source={svg} alt={`${f.title || f.slug}: ${KIND_T[kind]}, tổng ${Math.round(v.total * 100)}%, ${etaText}`} /> : <Text>{f.title || f.slug} · {KIND_T[kind]} · {Math.round(v.total * 100)}% · {etaText}</Text>}
+          {!focused ? <Box flexDirection="row" justifyContent="flex-end"><Button key={'xem-' + f.slug} label="Xem trong văn phòng" onPress={() => update($, focus, () => f.slug)} /></Box> : null}
         </Box>
       )
     }
     return (
       <Box flexDirection="column" gap={1}>
-        <Box flexDirection="row" justifyContent="space-between">
-          <Text bold>Văn phòng · chủ tịch</Text>
-          <Box flexDirection="row" gap={1}>
-            <Text dimColor>{active.length} đang chạy</Text>
-            {waits > 0 && <Text color="yellow">{waits} chờ duyệt</Text>}
-            {errs > 0 && <Text color="red">{errs} lỗi</Text>}
-          </Box>
-        </Box>
+        {Svg ? <Svg source={headerSvg(W, active.length, waits, errs, finished.length)} alt={`Văn phòng: ${active.length} đang chạy, ${waits} chờ duyệt, ${errs} lỗi`} /> : <Text bold>Văn phòng · chủ tịch</Text>}
         {Svg ? <Svg source={scene} alt={shown ? `Văn phòng: ${shown.title || shown.slug}` : 'Văn phòng đang chờ việc'} width={px} height={px} isInteractive /> : null}
         {list.length === 0 ? <Text dimColor>Chưa có việc nào. Ghi trạng thái bằng office-status (xem README) hoặc gửi việc từ repo video.</Text> : null}
         {active.map(card)}
-        {finished.length > 0 && <Text bold>Đã xong ({finished.length})</Text>}
-        {finished.slice(0, 5).map(f => (
-          <Box key={`job-${f.slug}`} flexDirection="row" justifyContent="space-between">
-            <Text color="green">✓ {f.title || f.slug}</Text>
-            <Box flexDirection="row" gap={1}>
-              <Text dimColor>{clock(f.updated)}</Text>
-              <Button key={'xem-' + f.slug} label="Xem" onPress={() => update($, focus, () => f.slug)} />
-            </Box>
+        {finished.length > 0 && Svg ? <Svg source={doneShelfSvg(W, finished.slice(0, 6).map(f => ({ title: f.title || f.slug, when: clock(f.updated) })))} alt={`Đã xong ${finished.length} việc`} /> : null}
+        {finished.length > 0 ? (
+          <Box flexDirection="row" gap={1} flexWrap="wrap">
+            {finished.slice(0, 6).map(f => <Button key={'xem-' + f.slug} label={`Xem ${[...(f.title || f.slug)].slice(0, 14).join('')}`} onPress={() => update($, focus, () => f.slug)} />)}
           </Box>
-        ))}
+        ) : null}
         <Box flexDirection="row" justifyContent="space-between">
           <Text dimColor>{p.error ? p.error : p.at ? `Cập nhật ${dur((now - p.at) / 1000)} trước · tự làm mới mỗi 30 giây` : 'Đang đọc trạng thái…'}</Text>
           <Button key="lam-moi" label="Làm mới" onPress={() => { lastScrolled = ''; return refresh($) }} />
