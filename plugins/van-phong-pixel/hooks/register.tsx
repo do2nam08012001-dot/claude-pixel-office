@@ -23,7 +23,7 @@ const focus = atom({ plugin: 'van-phong-pixel', key: 'focus' } as const, '')
 const owned = atom({ plugin: 'van-phong-pixel', key: 'owned' } as const, [] as Owned[])
 // jobs of other sessions shown in the "other jobs" strip (not followed here)
 const others = atom({ plugin: 'van-phong-pixel', key: 'others' } as const, [] as Film[], { shape: 'films-3' })
-let busy = false, again = false, cwdSkill: string | undefined
+let busy = false, again = false, cwdSkill: string | undefined, skills: string[] = [], scanOk = 0, ownKey = ''
 const finish = new Map<string, number>()   // slug -> finish time shown (ms)
 const paneOpen = atom({ plugin: 'van-phong-pixel', key: 'paneOpen' } as const, false)
 // learned stage durations (seconds, median of the last films) per "skill:stage"; seeds the estimates of new films
@@ -218,10 +218,18 @@ async function refreshInner($: any) {
     if (ticks++ % SCAN_EVERY === 0 || mine0.some(m => !m.skill)) {
       try {
         const fresh: Film[] = []
-        const r = await $.process.run([bin, 'cat', drive, '--include', '/*/status/*.json'], { timeoutMs: 25000 })
-        if (r.exitCode !== 0) throw new Error(fail(r))
-        for (const o of objects(r.stdout)) if (o.slug) fresh.push({ ...o, source: 'drive' })
-        driveCache = fresh; driveError = ''   // swap only on success: a failed read keeps the last list
+        if (!skills.length || ticks % 60 === 1) {
+          const d = await $.process.run([bin, 'lsf', drive, '--dirs-only'], { timeoutMs: 60000 })
+          if (d.exitCode !== 0) throw new Error(fail(d))
+          skills = d.stdout.split(/\r?\n/).map((x: string) => x.replace(/\/$/, '').trim()).filter(Boolean)
+        }
+        const parts = await Promise.all(skills.map(async (k: string) => {
+          const r = await $.process.run([bin, 'cat', `${drive}/${k}/status`, '--include', '*.json'], { timeoutMs: 60000 })
+          if (r.exitCode !== 0) throw new Error(fail(r))
+          return r.stdout as string
+        }))
+        for (const p of parts) for (const o of objects(p)) if (o.slug) fresh.push({ ...o, source: 'drive' })
+        driveCache = fresh; driveError = ''; scanOk = Date.now()   // swap only on success: a failed read keeps the last list
       } catch (err: any) { driveError = `Drive: ${String(err?.message ?? err).slice(0, 120)}` }
     } else {
       // this session's jobs: one small file each, read in parallel (a few seconds at most)
@@ -236,8 +244,8 @@ async function refreshInner($: any) {
   if (drive) { for (const o of driveCache) if (!all.some(f => f.slug === o.slug)) all.push(o); if (driveError) errors.push(driveError) }
   // a claimed job that never appeared anywhere (failed command) leaves after 4 minutes
   {
-    const ghosts = ((await read($, owned)) ?? []).filter(m => Date.now() - m.at > 4 * 60_000 && !all.some(f => f.slug === m.slug)).map(m => m.slug)
-    if (ghosts.length && !driveError) await update($, owned, (o: Owned[]) => (o ?? []).filter(x => !ghosts.includes(x.slug)))
+    const ghosts = ((await read($, owned)) ?? []).filter(m => scanOk - m.at > 4 * 60_000 && !all.some(f => f.slug === m.slug)).map(m => m.slug)
+    if (ghosts.length) await update($, owned, (o: Owned[]) => (o ?? []).filter(x => !ghosts.includes(x.slug))); void keep($)
   }
   // this session's jobs; one not on Drive yet shows at once as "uploading"
   const mine = (await read($, owned)) ?? []
@@ -254,7 +262,7 @@ async function refreshInner($: any) {
   await learn($, list)
   // finished jobs leave on their own; other sessions' finished jobs are not shown at all
   const gone = list.filter(f => isDone(f) && Date.now() - f.updated > DONE_KEEP).map(f => f.slug)
-  if (gone.length) await update($, owned, (o: Owned[]) => (o ?? []).filter(x => !gone.includes(x.slug)))
+  if (gone.length) await update($, owned, (o: Owned[]) => (o ?? []).filter(x => !gone.includes(x.slug))); void keep($)
   for (let i = list.length - 1; i >= 0; i--) if (gone.includes(list[i].slug)) list.splice(i, 1)
   await update($, others, () => all.filter(f => !mine.some(m => m.slug === f.slug) && !isDone(f)).sort((a, b) => b.updated - a.updated))
   // notice step changes (the previous step's role hands the work to the new one)
@@ -292,8 +300,9 @@ async function refreshInner($: any) {
   }
 }
 
+async function keep($: any) { if (ownKey) { try { await $.store.set(ownKey, (await read($, owned)) ?? []) } catch { /* read-only */ } } }
 async function adopt($: any, f: Film) {
-  await update($, owned, (m: Owned[]) => [...(m ?? []).filter(x => x.slug !== f.slug), { slug: f.slug, title: f.title || f.slug, skill: f.skill, at: Date.now() }])
+  await update($, owned, (m: Owned[]) => [...(m ?? []).filter(x => x.slug !== f.slug), { slug: f.slug, title: f.title || f.slug, skill: f.skill, at: Date.now() }]); void keep($)
   await update($, films, (l: Film[]) => [f, ...(l ?? []).filter(x => x.slug !== f.slug)])
   await update($, others, (l: Film[]) => (l ?? []).filter(x => x.slug !== f.slug))
   await update($, focus, () => f.slug); lastScrolled = ''
@@ -301,7 +310,7 @@ async function adopt($: any, f: Film) {
 }
 // stop following a job here; a job that went silent (or is done) also loses its status file on Drive, so no session shows it again
 async function drop($: any, f: Film, purge: boolean) {
-  await update($, owned, (m: Owned[]) => (m ?? []).filter(x => x.slug !== f.slug))
+  await update($, owned, (m: Owned[]) => (m ?? []).filter(x => x.slug !== f.slug)); void keep($)
   await update($, films, (l: Film[]) => (l ?? []).filter(x => x.slug !== f.slug))
   await update($, others, (l: Film[]) => (l ?? []).filter(x => x.slug !== f.slug))
   if (purge && f.source === 'drive' && f.skill) {
@@ -322,7 +331,7 @@ async function claim($: any, command: string) {
   const m = SEND.exec(command) ?? INIT.exec(command)
   if (!m) return
   const tm = TITLE_RE.exec(command), skill = /explainer/.test(command) ? 'jp-explainer-video' : /history-video/.test(command) ? 'jp-history-video' : cwdSkill
-  await update($, owned, (o: Owned[]) => (o ?? []).some(x => x.slug === m[1]) ? o : [...(o ?? []), { slug: m[1], title: tm ? tm[1] ?? tm[2] : m[1], skill, at: Date.now() }])
+  await update($, owned, (o: Owned[]) => (o ?? []).some(x => x.slug === m[1]) ? o : [...(o ?? []), { slug: m[1], title: tm ? tm[1] ?? tm[2] : m[1], skill, at: Date.now() }]); void keep($)
   await update($, focus, () => m[1]); lastScrolled = ''
   void refresh($)
 }
@@ -424,7 +433,9 @@ async function drawOffice($: any, e: any) {
     const stale = kind === 'stale' ? `Không cập nhật ${dur((now - f.updated) / 1000)}: có thể đã dừng.` : ''
     // running: the cloud's latest note (what it is doing now) and the file it touched last
     const td = (f as any).todo as { done: number; total: number; current: string } | undefined
-    const live = kind === 'run' && !v.allDone ? (td?.current ? `${td.current} (${td.done}/${td.total})` : f.message || '') : ''
+    // what the cloud is doing: its todo item, else its note, else the render % or the last file it touched
+    const live = kind === 'run' && !v.allDone ? (td?.current ? `${td.current} (${td.done}/${td.total})` : f.message
+      || (f.stage === 'render' ? `Render ${Math.round((f.render ?? 0) * 100)}%` : f.activity ? `vừa sửa ${f.activity}` : '')) : ''
     const message = f.blocked || f.approval ? (f.message || (f.blocked ? 'Công việc báo bị vướng.' : 'Công việc chờ bạn trả lời.')) : stale || (live ? `Đang làm: ${live}` : '')
     const reply = f.blocked || f.approval ? (f.source === 'drive' ? 'Trả lời ngay trong phiên gốc này — Claude chuyển sang phiên cloud.' : 'Trả lời trong phiên đang chạy việc này.') : stale ? 'Hỏi Claude ở phiên gốc kiểm tra phiên cloud.' : live && f.activity ? `Claude vừa: ${f.activity}` : ''
     const svg = cardSvg({ title: f.title || f.slug, group, status: { t: KIND_T[kind], kind }, total: v.total, etaText, steps, progress: v.frac, message, reply, updatedText: `${dur((now - f.updated) / 1000)} trước`, focused }, W)
@@ -484,6 +495,11 @@ async function drawOffice($: any, e: any) {
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     const cwd = String((e as any).cwd ?? '')
+    ownKey = `owned:${String((e as any).session_id ?? (e as any).sessionId ?? cwd)}`
+    try {
+      const saved = (await $.store.get(ownKey)) as Owned[] | undefined
+      if (saved?.length) await update($, owned, (o: Owned[]) => [...(o ?? []), ...saved.filter(s => !(o ?? []).some(x => x.slug === s.slug))]); void keep($)
+    } catch { /* first start */ }
     cwdSkill = /explainer/.test(cwd) ? 'jp-explainer-video' : /history-video/.test(cwd) ? 'jp-history-video' : undefined
     // a cloud session of a video repo reports Claude's work live (the PC's office reads it from Drive)
     if (cwd && cwdSkill) {

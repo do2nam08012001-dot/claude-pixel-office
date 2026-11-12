@@ -25,6 +25,7 @@ function engine(on: any, calls: string[][]) {
     calls.push(e.argv ?? e.command ?? e)
     const argv = (e.argv ?? []) as string[]
     if (argv[0] === 'sh') return { value: { exitCode: 0, stdout: String(argv[4] ?? '').startsWith('/home/user') ? 'cloud' : '', stderr: '' } }
+    if (argv[1] === 'lsf') return { value: { exitCode: 0, stdout: 'jp-history-video/', stderr: '' } }
     if (argv[1] === 'cat') return { value: { exitCode: 0, stdout: JSON.stringify(sony) + JSON.stringify(demo) + JSON.stringify(fin) + JSON.stringify(appr), stderr: '' } }
     return { value: { exitCode: 0, stdout: '', stderr: '' } }
   })
