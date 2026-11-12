@@ -1,6 +1,6 @@
 import { atom, read, update } from 'claude-code'
 import type { Register } from 'claude-code'
-import type { Film, Poll, Role, Step } from '../types'
+import type { Film, Owned, Poll, Role, Step } from '../types'
 import { ASSETS } from './assets'
 import { officeSvg, legacy } from './scene'
 import { cardSvg, headerSvg, doneShelfSvg } from './cards'
@@ -18,6 +18,11 @@ const DEFAULT_DRIVE = 'gdrive:jp-studio'
 const films = atom({ plugin: 'van-phong-pixel', key: 'films' } as const, [] as Film[], { shape: 'films-3' })
 const poll = atom({ plugin: 'van-phong-pixel', key: 'poll' } as const, { at: 0, error: '' } as Poll)
 const focus = atom({ plugin: 'van-phong-pixel', key: 'focus' } as const, '')
+// jobs started from THIS session (send.sh / office-status init seen in its Bash calls, or adopted with a button)
+const owned = atom({ plugin: 'van-phong-pixel', key: 'owned' } as const, [] as Owned[])
+// jobs of other sessions shown in the "other jobs" strip (not followed here)
+const others = atom({ plugin: 'van-phong-pixel', key: 'others' } as const, [] as Film[], { shape: 'films-3' })
+let busy = false, again = false
 let lastScrolled = ''
 // step changes the pane has noticed: slug -> { step, from, to, at }; the hand-off walk plays from the moment it is noticed
 const seen = new Map<string, { step: string; from?: string; to?: string; at: number }>()
@@ -40,8 +45,8 @@ const GROUP_VI: Record<string, string> = { 'jp-history-video': 'video lịch s�
 const dur = (s: number) => (s < 90 ? `${Math.max(1, Math.round(s))} giây` : s < 90 * 60 ? `${Math.round(s / 60)} phút` : `${Math.floor(s / 3600)} giờ ${Math.round((s % 3600) / 60)} phút`)
 const clock = (ms: number) => { const d = new Date(ms); return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}` }
 
-type StepView = Step & { state: 'done' | 'now' | 'wait'; took?: number; elapsed?: number; left?: number | null; guess?: number | null }
-type View = { steps: StepView[]; idx: number; allDone: boolean; progress: number; scene: any; total: number; remaining: number | null; known: boolean }
+type StepView = Step & { state: 'done' | 'now' | 'wait'; took?: number; elapsed?: number; left?: number | null; guess?: number | null; w: number }
+type View = { steps: StepView[]; idx: number; allDone: boolean; progress: number; frac: number; scene: any; total: number; remaining: number | null; known: boolean }
 
 function view(f: Film, now: number): View {
   let steps: Step[], idx: number, allDone: boolean, progress: number, scene: any
@@ -70,29 +75,33 @@ function view(f: Film, now: number): View {
   const tooks = steps.map(s => (h[s.id]?.start && h[s.id]?.end ? (h[s.id].end! - h[s.id].start) / 1000 : undefined))
   const doneT = tooks.filter((x): x is number => typeof x === 'number')
   const avg = doneT.length ? doneT.reduce((a, b) => a + b, 0) / doneT.length : null
-  let remaining: number | null = 0, spent = 0, known = true
+  let remaining: number | null = 0, known = true, frac = 0
   const sv: StepView[] = steps.map((s, i) => {
-    if (allDone || i < idx) { const took = tooks[i]; if (took) spent += took; return { ...s, state: 'done', took } }
+    if (allDone || i < idx) { const took = tooks[i]; return { ...s, state: 'done', took, w: took ?? s.est ?? avg ?? 60 } }
     if (i === idx) {
       const elapsed = h[s.id]?.start ? Math.max(0, (now - h[s.id].start) / 1000) : undefined
       let left: number | null = typeof f.eta === 'number' ? f.eta
         : progress > 0.05 && elapsed ? elapsed * (1 - progress) / progress
         : s.est ? Math.max(s.est - (elapsed ?? 0), s.est * 0.1)
         : avg ? Math.max(avg - (elapsed ?? 0), avg * 0.1) : null
-      if (elapsed) spent += elapsed
       if (left === null) known = false; else remaining! += left
-      return { ...s, state: 'now', elapsed, left }
+      // share of the current step done: reported progress, else time spent vs time still expected (never 100 %)
+      frac = progress > 0 ? progress : elapsed && left != null ? elapsed / (elapsed + left) : 0
+      frac = Math.min(0.95, Math.max(0, frac))
+      return { ...s, state: 'now', elapsed, left, w: s.est ?? avg ?? ((elapsed ?? 0) + (left ?? 0) || 60) }
     }
     const guess = s.est ?? avg
     if (guess == null) known = false; else remaining! += guess
-    return { ...s, state: 'wait', guess }
+    return { ...s, state: 'wait', guess, w: guess ?? 60 }
   })
   if (allDone) remaining = 0
   // progress per second of the current step, so the HP bar above the worker grows smoothly between refreshes
   const curV = sv.find(s => s.state === 'now')
   if (curV && curV.left && curV.left > 0) scene = { ...scene, rate: (1 - progress) / curV.left }
-  const total = known && spent + (remaining ?? 0) > 0 ? spent / (spent + (remaining ?? 0)) : (Math.max(0, idx) + progress) / Math.max(1, steps.length)
-  return { steps: sv, idx, allDone, progress, scene, total: allDone ? 1 : Math.min(0.99, total), remaining: known ? remaining : null, known }
+  // total % = finished step weights + the current step's share, over all weights (same weights as the bar segments)
+  const W = sv.reduce((a, s) => a + s.w, 0) || 1
+  const total = sv.reduce((a, s) => a + (s.state === 'done' ? s.w : s.state === 'now' ? s.w * frac : 0), 0) / W
+  return { steps: sv, idx, allDone, progress, frac, scene, total: allDone ? 1 : Math.min(0.99, total), remaining: known ? remaining : null, known }
 }
 
 // Pull complete JSON objects out of concatenated text (rclone cat joins files; files may be pretty-printed).
@@ -141,7 +150,12 @@ function summary(list: Film[], now: number) {
 const isDone = (f: Film) => !!f.done || f.step === 'done' || f.stage === 'done'
 
 async function refresh($: any) {
-  const list: Film[] = [], errors: string[] = []
+  if (busy) { again = true; return }   // a slow rclone call must not overlap the next tick (that made the count jump 2 -> 0)
+  busy = true
+  try { do { again = false; await refreshInner($) } while (again) } finally { busy = false }
+}
+async function refreshInner($: any) {
+  const all: Film[] = [], errors: string[] = []
   const h = await home($)
   const dir = h ? `${h}/.claude/van-phong` : ''
   let drive = DEFAULT_DRIVE
@@ -150,22 +164,28 @@ async function refresh($: any) {
     try {
       for (const e of await $.fs.list(`${dir}/status`)) {
         if (e.kind !== 'file' || !e.name.endsWith('.json')) continue
-        try { for (const o of objects(await $.fs.read(`${dir}/status/${e.name}`))) if (o.slug) list.push({ ...o, source: 'local', updated: o.updated || e.mtimeMs }) } catch { /* unreadable */ }
+        try { for (const o of objects(await $.fs.read(`${dir}/status/${e.name}`))) if (o.slug) all.push({ ...o, source: 'local', updated: o.updated || e.mtimeMs }) } catch { /* unreadable */ }
       }
     } catch { /* no local folder */ }
   }
   const useDrive = drive && ticks++ % DRIVE_EVERY === 0
   if (useDrive) {
-    driveCache = []; driveError = ''
     try {
+      const fresh: Film[] = []
       const bin = await rclone($)
       if (!bin) throw new Error('chưa cài rclone')
       const r = await $.process.run([bin, 'cat', drive, '--include', '/*/status/*.json'], { timeoutMs: 25000 })
       if (r.exitCode !== 0) throw new Error((r.stderr || 'rclone lỗi').split('\n').filter((l: string) => l && !l.includes('NOTICE')).slice(-1)[0] || 'rclone lỗi')
-      for (const o of objects(r.stdout)) if (o.slug) driveCache.push({ ...o, source: 'drive' })
+      for (const o of objects(r.stdout)) if (o.slug) fresh.push({ ...o, source: 'drive' })
+      driveCache = fresh; driveError = ''   // swap only on success: a failed read keeps the last list
     } catch (err: any) { driveError = `Drive: ${String(err?.message ?? err).slice(0, 120)}` }
   }
-  if (drive) { for (const o of driveCache) if (!list.some(f => f.slug === o.slug)) list.push(o); if (driveError) errors.push(driveError) }
+  if (drive) { for (const o of driveCache) if (!all.some(f => f.slug === o.slug)) all.push(o); if (driveError) errors.push(driveError) }
+  // this session's jobs; one not on Drive yet shows at once as "uploading"
+  const mine = (await read($, owned)) ?? []
+  const list: Film[] = mine.map(m => all.find(f => f.slug === m.slug)
+    ?? { slug: m.slug, title: m.title || m.slug, skill: m.skill, stage: 'inputs', message: 'Đang tải dữ liệu lên Drive…', updated: m.at, source: 'drive', history: { inputs: { start: m.at } } } as Film)
+  await update($, others, () => all.filter(f => !mine.some(m => m.slug === f.slug)).sort((a, b) => b.updated - a.updated))
   // notice step changes (the previous step's role hands the work to the new one)
   const nowMs = Date.now()
   for (const f of list) {
@@ -200,12 +220,42 @@ async function refresh($: any) {
   }
 }
 
+async function adopt($: any, f: Film) {
+  await update($, owned, (m: Owned[]) => [...(m ?? []).filter(x => x.slug !== f.slug), { slug: f.slug, title: f.title || f.slug, skill: f.skill, at: Date.now() }])
+  await update($, focus, () => f.slug); lastScrolled = ''
+  await refresh($)
+}
+// stop following a job here; a job that went silent (or is done) also loses its status file on Drive, so no session shows it again
+async function drop($: any, f: Film, purge: boolean) {
+  await update($, owned, (m: Owned[]) => (m ?? []).filter(x => x.slug !== f.slug))
+  if (purge && f.source === 'drive' && f.skill) {
+    try {
+      const bin = await rclone($)
+      if (bin) await $.process.run([bin, 'deletefile', `${DEFAULT_DRIVE}/${f.skill}/status/${f.slug}.json`], { timeoutMs: 20000 })
+      driveCache = driveCache.filter(x => x.slug !== f.slug)
+    } catch { /* offline: it just stays in the other list */ }
+  }
+  await refresh($)
+}
+// a Bash call of this session that sends a job: the job belongs to this session from that moment
+const SEND = /local\/send\.sh["']?\s+([a-z0-9][a-z0-9-]*)/, INIT = /office-status\.mjs["']?\s+init\s+["']?([A-Za-z0-9._-]+)/
+const TITLE_RE = /--title\s+(?:"([^"]*)"|'([^']*)')/
+async function claim($: any, command: string) {
+  const m = SEND.exec(command) ?? INIT.exec(command)
+  if (!m) return
+  const tm = TITLE_RE.exec(command), skill = /repo-jp-explainer|explainer/.test(command) ? 'jp-explainer-video' : /history/.test(command) ? 'jp-history-video' : undefined
+  await update($, owned, (o: Owned[]) => (o ?? []).some(x => x.slug === m[1]) ? o : [...(o ?? []), { slug: m[1], title: tm ? tm[1] ?? tm[2] : m[1], skill, at: Date.now() }])
+  await update($, focus, () => m[1]); lastScrolled = ''
+  void refresh($)
+}
+
 // the office drawing: shared by the side pane and the transcript row (cloud sessions place no panes)
 async function drawOffice($: any, e: any) {
   const els: any = $.ui.resolve(e)
   const { Box, Text, Button } = els
   const Svg = els.Svg
   const list = (await read($, films)) ?? []
+  const other = (await read($, others)) ?? []
   const p = (await read($, poll)) ?? { at: 0, error: '' }
   const want = (await read($, focus)) ?? ''
   const now = Date.now()
@@ -236,20 +286,23 @@ async function drawOffice($: any, e: any) {
   const card = (f: Film) => {
     const v = view(f, now), kind = kindOf(f), focused = f.slug === shown?.slug
     const group = GROUP_VI[f.group ?? f.skill ?? ''] ?? f.group ?? f.skill ?? ''
-    const etaText = v.allDone ? 'đã xong' : v.remaining == null ? 'chưa đủ dữ liệu để ước lượng' : `còn ~${dur(v.remaining)} · xong ~${clock(now + v.remaining * 1000)}`
+    const etaText = v.allDone ? 'đã xong' : kind === 'stale' ? 'im lặng — không ước lượng' : v.remaining == null ? 'chưa đủ dữ liệu để ước lượng' : `còn ~${dur(v.remaining)} · xong ~${clock(now + v.remaining * 1000)}`
     const steps: CardStep[] = v.steps.map(s => ({
-      label: s.label, role: s.role, state: s.state, w: s.took ?? s.est ?? s.guess ?? s.left ?? 1,
+      label: s.label, role: s.role, state: s.state, w: s.w,
       took: s.took ? dur(s.took) : undefined, elapsed: s.elapsed ? dur(s.elapsed) : undefined,
       left: s.left != null ? `~${dur(s.left)}` : undefined, guess: s.guess != null ? dur(s.guess) : undefined,
     }))
     const stale = kind === 'stale' ? `Không cập nhật ${dur((now - f.updated) / 1000)}: có thể đã dừng.` : ''
     const message = f.blocked || f.approval ? (f.message || (f.blocked ? 'Công việc báo bị vướng.' : 'Công việc chờ bạn trả lời.')) : stale
     const reply = f.blocked || f.approval ? (f.source === 'drive' ? 'Trả lời ngay trong phiên gốc này — Claude chuyển sang phiên cloud.' : 'Trả lời trong phiên đang chạy việc này.') : stale ? 'Hỏi Claude ở phiên gốc kiểm tra phiên cloud.' : ''
-    const svg = cardSvg({ title: f.title || f.slug, group, status: { t: KIND_T[kind], kind }, total: v.total, etaText, steps, progress: v.progress, message, reply, updatedText: `${dur((now - f.updated) / 1000)} trước`, focused }, W)
+    const svg = cardSvg({ title: f.title || f.slug, group, status: { t: KIND_T[kind], kind }, total: v.total, etaText, steps, progress: v.frac, message, reply, updatedText: `${dur((now - f.updated) / 1000)} trước`, focused }, W)
     return (
       <Box key={v.allDone ? `job-${f.slug}` : `cur-${f.slug}`} flexDirection="column">
         {Svg ? <Svg source={svg} alt={`${f.title || f.slug}: ${KIND_T[kind]}, tổng ${Math.round(v.total * 100)}%, ${etaText}`} /> : <Text>{f.title || f.slug} · {KIND_T[kind]} · {Math.round(v.total * 100)}% · {etaText}</Text>}
-        {!focused ? <Box flexDirection="row" justifyContent="flex-end"><Button key={'xem-' + f.slug} label="Xem trong văn phòng" onPress={() => update($, focus, () => f.slug)} /></Box> : null}
+        <Box flexDirection="row" justifyContent="flex-end" gap={1}>
+          {!focused ? <Button key={'xem-' + f.slug} label="Xem trong văn phòng" onPress={() => update($, focus, () => f.slug)} /> : null}
+          <Button key={'huy-' + f.slug} label={kind === 'stale' || v.allDone ? 'Xóa khỏi văn phòng' : 'Hủy theo dõi'} onPress={() => drop($, f, kind === 'stale')} />
+        </Box>
       </Box>
     )
   }
@@ -262,12 +315,29 @@ async function drawOffice($: any, e: any) {
           {overlaySvg ? <Box key="office-old" position="absolute" top={0} left={0}><Svg source={overlaySvg} alt="" width={px} height={px} isInteractive /></Box> : null}
         </Box>
       ) : null}
-      {list.length === 0 ? <Text dimColor>Chưa có việc nào. Ghi trạng thái bằng office-status (xem README) hoặc gửi việc từ repo video.</Text> : null}
+      {list.length === 0 ? <Text dimColor>Phiên này chưa có việc nào. Việc bạn giao trong phiên này (gửi lên Drive / office-status init) sẽ hiện ở đây ngay.</Text> : null}
       {active.map(card)}
       {finished.length > 0 && Svg ? <Svg source={doneShelfSvg(W, finished.slice(0, 6).map(f => ({ title: f.title || f.slug, when: clock(f.updated) })))} alt={`Đã xong ${finished.length} việc`} /> : null}
       {finished.length > 0 ? (
         <Box flexDirection="row" gap={1} flexWrap="wrap">
           {finished.slice(0, 6).map(f => <Button key={'xem-' + f.slug} label={`Xem ${[...(f.title || f.slug)].slice(0, 14).join('')}`} onPress={() => update($, focus, () => f.slug)} />)}
+        </Box>
+      ) : null}
+      {other.length > 0 ? (
+        <Box key="khac" flexDirection="column">
+          <Text dimColor>Việc của phiên khác ({other.length}) — không tính vào văn phòng này:</Text>
+          {other.slice(0, 6).map(f => {
+            const k = isDone(f) ? 'xong' : now - f.updated > STALE_MS ? `im lặng ${dur((now - f.updated) / 1000)}` : 'đang chạy'
+            return (
+              <Box key={'o-' + f.slug} flexDirection="row" justifyContent="space-between" gap={1}>
+                <Text dimColor>{[...(f.title || f.slug)].slice(0, 28).join('')} · {k}</Text>
+                <Box flexDirection="row" gap={1}>
+                  <Button key={'theo-' + f.slug} label="Theo dõi ở đây" onPress={() => adopt($, f)} />
+                  {k !== 'đang chạy' ? <Button key={'xoa-' + f.slug} label="Xóa" onPress={() => drop($, f, true)} /> : null}
+                </Box>
+              </Box>
+            )
+          })}
         </Box>
       ) : null}
       <Box flexDirection="row" justifyContent="space-between">
@@ -308,4 +378,10 @@ export const register: Register = on => {
   })
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => drawOffice($, e))
+
+  // follow jobs this session sends (before the upload starts, so the office shows it at once)
+  on('tool.call', { tool: 'Bash' }, async ($, e, next) => {
+    try { await claim($, String((e as any).command ?? '')) } catch { /* never block the command */ }
+    return next(e)
+  })
 }

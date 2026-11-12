@@ -29,9 +29,11 @@ export type Film = {
   source?: string
 }
 export type Poll = { at: number; error: string }
+/** a job followed by this session */
+export type Owned = { slug: string; title: string; skill?: string; at: number }
 
 declare module 'claude-code' {
   interface PluginState {
-    'van-phong-pixel': { films: Shaped<Film[]>; poll: Poll; focus: string }
+    'van-phong-pixel': { films: Shaped<Film[]>; poll: Poll; focus: string; owned: Owned[]; others: Shaped<Film[]> }
   }
 }
