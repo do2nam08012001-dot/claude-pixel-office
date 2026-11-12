@@ -170,3 +170,11 @@ export function footerSvg(W: number, text: string, isError: boolean) {
     + T(isError ? 48 : 86, 17, fit(text, W - (isError ? 56 : 94), 11.5), SUB, 11.5)
   return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" shape-rendering="crispEdges"><style>.led{animation:led .9s steps(1) infinite}@keyframes led{50%{opacity:.25}}text{shape-rendering:auto}</style>${o}</svg>`
 }
+
+// pixel button face (the label is a plain Button drawn on top, so it stays a real, pressable control)
+export function buttonSvg(w: number, h: number, tone: 'wood' | 'primary' | 'danger') {
+  const f = tone === 'primary' ? ['#1F6E43', '#2E9E5F', '#57C784'] : tone === 'danger' ? ['#7A2328', '#A8343A', '#D9585E'] : [WOOD, WOOD2, WOODHI]
+  const o = R(2, 0, w - 4, h, OUT) + R(0, 2, w, h - 4, OUT) + R(2, 1, w - 4, h - 2, f[0]) + R(1, 2, w - 2, h - 4, f[0])
+    + R(2, 1, w - 4, h - 5, f[1]) + R(1, 3, w - 2, h - 8, f[1]) + R(3, 2, w - 6, 1, f[2])
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${w} ${h}" width="${w}" height="${h}" shape-rendering="crispEdges">${o}</svg>`
+}

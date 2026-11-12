@@ -3,7 +3,7 @@ import type { Register } from 'claude-code'
 import type { Film, Owned, Poll, Role, Step } from '../types'
 import { ASSETS } from './assets'
 import { officeSvg, legacy } from './scene'
-import { cardSvg, headerSvg, footerSvg } from './cards'
+import { cardSvg, headerSvg, footerSvg, buttonSvg } from './cards'
 import type { CardStep } from './cards'
 
 const PANE = 'van-phong'
@@ -79,12 +79,14 @@ function view(f: Film, now: number): View {
     steps = VIDEO_STEPS.map(s => ({ ...s, est: learned[`${f.skill}:${s.id}`] ?? s.est }))
     const map: Record<string, number> = { idle: -1, inputs: 0, research: 1, plan: 2, render: 3, qa: 4, deliver: 5, done: 6 }
     idx = map[f.stage ?? 'idle'] ?? -1; allDone = f.stage === 'done'
+    if (f.stage === 'render' && (f.render ?? 0) >= 0.999) idx = map.qa
     // share of the current stage: render %, the cloud's notes (research / plan), upload % (inputs)
     const pk = f.stage === 'render' ? f.render : f.stage === 'plan' ? f.plan : f.stage === 'research' ? f.research : f.progress
     progress = Math.max(0, Math.min(1, pk ?? 0))
     scene = legacy(f)
   }
-  const h = f.history ?? {}
+  let h = f.history ?? {}
+  if (f.stage === 'render' && (f.render ?? 0) >= 0.999 && h.render?.start) { const e = h.render.end ?? f.updated; h = { ...h, render: { start: h.render.start, end: e }, qa: h.qa ?? { start: e } } }
   // a step that started in the last 40 s: the previous step's employee carries the work to the next room
   const cur0 = idx > 0 && idx < steps.length ? steps[idx] : null
   const n = seen.get(f.slug)
@@ -354,7 +356,19 @@ function describe(e: any): string {
   if (tool === 'Agent' || tool === 'Task') return `Giao việc: ${String(e.description ?? '').slice(0, 50)}`
   return tool.replace(/^mcp__[^_]+__/, '')
 }
+let etaAsks = 0, etaSeen = false
+const STAGE_MARK = /drive\.sh["']?\s+mark\s+(start|inputs|research_done|plan_done|render_start|render_done)\b([^\n;&|]*)/
+function askEta($: any, command: string) {
+  if (/drive\.sh["']?\s+mark\s+eta\s+\d/.test(command) || /drive\.sh["']?\s+mark\s+note\s+.*\s\d+(\.\d+)?\s*$/m.test(command)) { etaSeen = true; return }
+  const m = STAGE_MARK.exec(command)
+  if (!m) return
+  if (/\s\d+(\.\d+)?\s*["']?\s*$/.test(m[2])) { etaSeen = true; return }
+  if (etaAsks >= 3) return
+  etaAsks++
+  void $.prompt.submit({ text: `(Văn phòng hỏi ${etaAsks}/3) Người dùng cần giờ xong chính xác: ước còn bao nhiêu phút nữa thì xong CẢ phim, tính từ bây giờ? Trả lời bằng một lệnh: bash cloud/drive.sh mark eta <phút>, rồi làm tiếp việc đang dở. Từ giờ ghi kèm số phút ở cuối mỗi lệnh mark <bước> "" <phút>.` }).catch(() => {})
+}
 function report($: any, e: any) {
+  if (String(e.tool ?? '') === 'Bash') askEta($, String(e.command ?? ''))
   liveAct = describe(e)
   const list = Array.isArray(e.todos) ? e.todos : Array.isArray(e.items) ? e.items : null
   if (list) liveTodos = JSON.stringify(list.map((x: any) => ({ content: x.content, activeForm: x.activeForm, status: x.status })))
@@ -417,6 +431,7 @@ async function drawOffice($: any, e: any) {
     // one square picture that scales with the pane (the background is light enough now to fit with everything)
     sceneSvg = officeSvg(ASSETS, sceneState).full(px)
     if (sceneSvg.length > SVG_LIMIT) sceneSvg = officeSvg(ASSETS, { ...sceneState, lite: true }).full(px)
+    if (sceneSvg.length > SVG_LIMIT) sceneSvg = officeSvg(ASSETS, { ...sceneState, lite: true, lite2: true }).full(px)
   }
   if (!shownSvg) shownSvg = sceneSvg
   else if (sceneSvg !== shownSvg && !swapping) {
@@ -429,6 +444,18 @@ async function drawOffice($: any, e: any) {
   const kindOf = (f: Film) => (f.blocked ? 'err' : f.approval ? 'wait' : isDone(f) ? 'done' : now - f.updated > STALE_MS ? 'stale' : 'run') as 'err' | 'wait' | 'done' | 'stale' | 'run'
   const KIND_T = { err: 'Lỗi', wait: 'Chờ duyệt', done: 'Xong', stale: 'Im lặng', run: 'Đang làm' }
   const W = Math.max(240, px)
+  // a pixel button: the face is drawn, a plain Button on top keeps it a real control (keyboard, presses, tests)
+  const pixBtn = (key: string, label: string, onPress: () => any, tone: 'wood' | 'primary' | 'danger' = 'wood') => {
+    const w = Math.round([...label].reduce((a, ch) => a + ((ch.codePointAt(0) ?? 0) > 0x2000 ? 14 : 7.6), 0) + 28)
+    return Svg ? (
+      <Box key={key + '-box'} position="relative" width={w} height={30}>
+        <Svg source={buttonSvg(w, 30, tone)} alt={label} width={w} height={30} />
+        <Box position="absolute" top={0} left={0} width={w} height={30} justifyContent="center" alignItems="center">
+          <Button key={key} plain label={label} onPress={onPress} />
+        </Box>
+      </Box>
+    ) : <Button key={key} label={label} onPress={onPress} />
+  }
   const card = (f: Film) => {
     const v = view(f, now), kind = kindOf(f), focused = f.slug === shown?.slug
     const group = GROUP_VI[f.group ?? f.skill ?? ''] ?? f.group ?? f.skill ?? ''
@@ -451,11 +478,11 @@ async function drawOffice($: any, e: any) {
       <Box key={v.allDone ? `job-${f.slug}` : `cur-${f.slug}`} flexDirection="column">
         {Svg ? <Svg source={svg} alt={`${f.title || f.slug}: ${KIND_T[kind]}, tổng ${Math.round(v.total * 100)}%, ${etaText}`} /> : <Text>{f.title || f.slug} · {KIND_T[kind]} · {Math.round(v.total * 100)}% · {etaText}</Text>}
         <Box flexDirection="row" justifyContent="flex-end" gap={1}>
-          {f.approval && !f.blocked ? <Button key={'duyet-' + f.slug} variant="primary" label="✓ Duyệt" onPress={() => $.prompt.submit({ text: `Duyệt ${f.slug} — chuyển nguyên lời "duyệt" sang phiên cloud của phim này.` })} /> : null}
-          {f.approval || f.blocked ? <Button key={'sua-' + f.slug} label={f.blocked ? '✎ Trả lời lỗi' : '✎ Yêu cầu sửa'} onPress={() => $.prompt.fill({ text: `${f.blocked ? 'Trả lời lỗi' : 'Yêu cầu sửa'} ${f.slug} (chuyển sang phiên cloud): ` })} /> : null}
-          {v.allDone && f.source === 'drive' ? <Button key={'tai-' + f.slug} variant="primary" label="⬇ Tải video về" onPress={() => $.prompt.submit({ text: `Tải video ${f.slug} về máy: chạy local/fetch.sh ${f.slug}, rồi báo đường dẫn thư mục ket-qua.` })} /> : null}
-          {!focused ? <Button key={'xem-' + f.slug} label="👁 Xem trong văn phòng" onPress={() => update($, focus, () => f.slug)} /> : null}
-          <Button key={'huy-' + f.slug} label={kind === 'stale' || v.allDone ? '🗑 Xóa khỏi văn phòng' : '✕ Hủy theo dõi'} onPress={() => drop($, f, kind === 'stale')} />
+          {f.approval && !f.blocked ? pixBtn('duyet-' + f.slug, "✓ Duyệt", () => $.prompt.submit({ text: `Duyệt ${f.slug} — chuyển nguyên lời "duyệt" sang phiên cloud của phim này.` }), 'primary') : null}
+          {f.approval || f.blocked ? pixBtn('sua-' + f.slug, f.blocked ? '✎ Trả lời lỗi' : '✎ Yêu cầu sửa', () => $.prompt.fill({ text: `${f.blocked ? 'Trả lời lỗi' : 'Yêu cầu sửa'} ${f.slug} (chuyển sang phiên cloud): ` }), 'wood') : null}
+          {v.allDone && f.source === 'drive' ? pixBtn('tai-' + f.slug, "⬇ Tải video về", () => $.prompt.submit({ text: `Tải video ${f.slug} về máy: chạy local/fetch.sh ${f.slug}, rồi báo đường dẫn thư mục ket-qua.` }), 'primary') : null}
+          {!focused ? pixBtn('xem-' + f.slug, "👁 Xem trong văn phòng", () => update($, focus, () => f.slug), 'wood') : null}
+          {pixBtn('huy-' + f.slug, kind === 'stale' || v.allDone ? '🗑 Xóa khỏi văn phòng' : '✕ Hủy theo dõi', () => drop($, f, kind === 'stale'), 'danger')}
         </Box>
       </Box>
     )
@@ -475,7 +502,7 @@ async function drawOffice($: any, e: any) {
         <Box key="khac" flexDirection="column">
           <Box flexDirection="row" justifyContent="space-between">
             <Text dimColor>Việc của phiên khác đang chạy: {other.length}</Text>
-            <Button key="khac-mo" label={showOthers ? 'Ẩn' : 'Xem'} onPress={() => update($, openOthers, (v: boolean) => !v)} />
+            {pixBtn("khac-mo", showOthers ? 'Ẩn' : 'Xem', () => update($, openOthers, (v: boolean) => !v), 'wood')}
           </Box>
           {!showOthers ? null : other.slice(0, 6).map(f => {
             const k = isDone(f) ? 'xong' : now - f.updated > STALE_MS ? `im lặng ${dur((now - f.updated) / 1000)}` : 'đang chạy'
@@ -483,8 +510,8 @@ async function drawOffice($: any, e: any) {
               <Box key={'o-' + f.slug} flexDirection="row" justifyContent="space-between" gap={1}>
                 <Text dimColor>{[...(f.title || f.slug)].slice(0, 28).join('')} · {k}</Text>
                 <Box flexDirection="row" gap={1}>
-                  <Button key={'theo-' + f.slug} label="Theo dõi ở đây" onPress={() => adopt($, f)} />
-                  {k !== 'đang chạy' ? <Button key={'xoa-' + f.slug} label="Xóa" onPress={() => drop($, f, true)} /> : null}
+                  {pixBtn('theo-' + f.slug, "Theo dõi ở đây", () => adopt($, f), 'wood')}
+                  {k !== 'đang chạy' ? pixBtn('xoa-' + f.slug, "Xóa", () => drop($, f, true), 'danger') : null}
                 </Box>
               </Box>
             )
@@ -494,8 +521,8 @@ async function drawOffice($: any, e: any) {
       {Svg ? <Svg source={footerSvg(W, p.error ? p.error : p.at ? `cập nhật ${dur((now - p.at) / 1000)} trước · làm mới mỗi 5 giây` : 'đang đọc trạng thái…', !!p.error)} alt={p.error || 'Văn phòng đang cập nhật trực tiếp'} /> : <Text dimColor>{p.error || 'Đang cập nhật'}</Text>}
       <Box flexDirection="row" justifyContent="flex-end">
         <Box flexDirection="row" gap={1}>
-          <Button key="am-thanh" label={(await read($, soundOn)) === false ? '🔇 Bật tiếng' : '🔊 Tắt tiếng'} onPress={async () => { const on = !((await read($, soundOn)) ?? true); await update($, soundOn, () => on); try { await $.store.set('sound', on) } catch { /* read-only */ } }} />
-          <Button key="lam-moi" label="⟳ Làm mới" onPress={() => { lastScrolled = ''; return refresh($) }} />
+          {pixBtn("am-thanh", (await read($, soundOn)) === false ? '🔇 Bật tiếng' : '🔊 Tắt tiếng', async () => { const on = !((await read($, soundOn)) ?? true); await update($, soundOn, () => on); try { await $.store.set('sound', on) } catch { /* read-only */ } }, 'wood')}
+          {pixBtn("lam-moi", "⟳ Làm mới", () => { lastScrolled = ''; return refresh($) }, 'wood')}
         </Box>
       </Box>
     </Box>
