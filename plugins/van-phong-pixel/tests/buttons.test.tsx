@@ -23,6 +23,7 @@ function engine(on: any, calls: string[][]) {
   on('process.run', (_: any, e: any) => {
     calls.push(e.argv ?? e.command ?? e)
     const argv = (e.argv ?? []) as string[]
+    if (argv[0] === 'sh') return { value: { exitCode: 0, stdout: String(argv[4] ?? '').startsWith('/home/user') ? 'cloud' : '', stderr: '' } }
     if (argv[1] === 'cat') return { value: { exitCode: 0, stdout: JSON.stringify(sony) + JSON.stringify(demo) + JSON.stringify(fin), stderr: '' } }
     return { value: { exitCode: 0, stdout: '', stderr: '' } }
   })
@@ -55,4 +56,14 @@ test('adopt, then drop a silent job: buttons act', async ($, on) => {
   expect(calls.some(a => a.includes('deletefile'))).toBe(true)
   expect(await ui.find({ type: 'Button', key: 'huy-sony' })).toBeFalsy()
   await ui.unmount()
+})
+
+test('in a cloud film session, tool calls are reported live', async ($, on) => {
+  const calls: string[][] = []
+  engine(on, calls)
+  await $.session.start({ cwd: '/home/user/repo-jp-history-video', surface: 'desktop', isInteractive: true })
+  await $.tool.call({ tool: 'Bash', command: 'npm run check', description: 'Kiểm tra layout' })
+  const live = calls.find(a => a.includes('live'))
+  expect(live).toBeTruthy()
+  expect(live![3]).toBe('Kiểm tra layout')
 })

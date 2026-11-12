@@ -25,6 +25,8 @@ const owned = atom({ plugin: 'van-phong-pixel', key: 'owned' } as const, [] as O
 const others = atom({ plugin: 'van-phong-pixel', key: 'others' } as const, [] as Film[], { shape: 'films-3' })
 let busy = false, again = false, cwdSkill: string | undefined
 const finish = new Map<string, number>()   // slug -> finish time shown (ms)
+// cloud film session: repo root (has cloud/drive.sh) when this session runs in the cloud; live reports are throttled
+let cloudRoot = '', liveAct = '', liveTodos = '', liveDirty = false, livePushing = false, liveLast = 0
 const openOthers = atom({ plugin: 'van-phong-pixel', key: 'openOthers' } as const, false)
 let lastScrolled = ''
 // step changes the pane has noticed: slug -> { step, from, to, at }; the hand-off walk plays from the moment it is noticed
@@ -184,7 +186,7 @@ const isDone = (f: Film) => !!f.done || f.step === 'done' || f.stage === 'done'
 async function refresh($: any) {
   if (busy) { again = true; return }   // a slow rclone call must not overlap the next tick (that made the count jump 2 -> 0)
   busy = true
-  try { do { again = false; await refreshInner($) } while (again) } finally { busy = false }
+  try { do { again = false; await refreshInner($) } while (again) } catch { /* session ended mid-read: nothing to draw */ } finally { busy = false }
 }
 async function refreshInner($: any) {
   const all: Film[] = [], errors: string[] = []
@@ -308,6 +310,38 @@ async function claim($: any, command: string) {
   void refresh($)
 }
 
+const base = (p: unknown) => String(p ?? '').split(/[\\/]/).pop() ?? ''
+function describe(e: any): string {
+  const tool = String(e.tool ?? '')
+  if (tool === 'Bash') return String(e.description || String(e.command ?? '').slice(0, 70))
+  if (/^(Edit|Write|MultiEdit|NotebookEdit)$/.test(tool)) return `Sửa ${base(e.file_path ?? e.notebook_path)}`
+  if (tool === 'Read') return `Đọc ${base(e.file_path)}`
+  if (tool === 'Grep' || tool === 'Glob') return `Tìm ${String(e.pattern ?? '').slice(0, 40)}`
+  if (tool === 'TodoWrite' || /update_plan$/.test(tool)) return 'Cập nhật danh sách việc'
+  if (tool === 'Agent' || tool === 'Task') return `Giao việc: ${String(e.description ?? '').slice(0, 50)}`
+  return tool.replace(/^mcp__[^_]+__/, '')
+}
+function report($: any, e: any) {
+  liveAct = describe(e)
+  const list = Array.isArray(e.todos) ? e.todos : Array.isArray(e.items) ? e.items : null
+  if (list) liveTodos = JSON.stringify(list.map((x: any) => ({ content: x.content, activeForm: x.activeForm, status: x.status })))
+  liveDirty = true
+  void pump($)
+}
+// one push at a time, at most every 4 s; the newest activity always wins
+async function pump($: any) {
+  if (livePushing) return
+  livePushing = true
+  try {
+    while (liveDirty) {
+      const wait = 4000 - (Date.now() - liveLast)
+      if (wait > 0) await new Promise<void>(res => $.clock.after(wait, () => res()))
+      liveDirty = false; liveLast = Date.now()
+      await $.process.run(['bash', `${cloudRoot}/cloud/drive.sh`, 'live', liveAct, liveTodos], { timeoutMs: 40000 })
+    }
+  } catch { /* offline: the next call tries again */ } finally { livePushing = false }
+}
+
 // the office drawing: shared by the side pane and the transcript row (cloud sessions place no panes)
 async function drawOffice($: any, e: any) {
   const els: any = $.ui.resolve(e)
@@ -355,9 +389,10 @@ async function drawOffice($: any, e: any) {
     }))
     const stale = kind === 'stale' ? `Không cập nhật ${dur((now - f.updated) / 1000)}: có thể đã dừng.` : ''
     // running: the cloud's latest note (what it is doing now) and the file it touched last
-    const live = kind === 'run' && !v.allDone ? (f.message || '') : ''
+    const td = (f as any).todo as { done: number; total: number; current: string } | undefined
+    const live = kind === 'run' && !v.allDone ? (td?.current ? `${td.current} (${td.done}/${td.total})` : f.message || '') : ''
     const message = f.blocked || f.approval ? (f.message || (f.blocked ? 'Công việc báo bị vướng.' : 'Công việc chờ bạn trả lời.')) : stale || (live ? `Đang làm: ${live}` : '')
-    const reply = f.blocked || f.approval ? (f.source === 'drive' ? 'Trả lời ngay trong phiên gốc này — Claude chuyển sang phiên cloud.' : 'Trả lời trong phiên đang chạy việc này.') : stale ? 'Hỏi Claude ở phiên gốc kiểm tra phiên cloud.' : live && (f as any).activity ? `vừa cập nhật: ${(f as any).activity}` : ''
+    const reply = f.blocked || f.approval ? (f.source === 'drive' ? 'Trả lời ngay trong phiên gốc này — Claude chuyển sang phiên cloud.' : 'Trả lời trong phiên đang chạy việc này.') : stale ? 'Hỏi Claude ở phiên gốc kiểm tra phiên cloud.' : live && f.activity ? `Claude vừa: ${f.activity}` : ''
     const svg = cardSvg({ title: f.title || f.slug, group, status: { t: KIND_T[kind], kind }, total: v.total, etaText, steps, progress: v.frac, message, reply, updatedText: `${dur((now - f.updated) / 1000)} trước`, focused }, W)
     return (
       <Box key={v.allDone ? `job-${f.slug}` : `cur-${f.slug}`} flexDirection="column">
@@ -413,6 +448,13 @@ export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     const cwd = String((e as any).cwd ?? '')
     cwdSkill = /explainer/.test(cwd) ? 'jp-explainer-video' : /history-video/.test(cwd) ? 'jp-history-video' : undefined
+    // a cloud session of a video repo reports Claude's work live (the PC's office reads it from Drive)
+    if (cwd && cwdSkill) {
+      try {
+        const r = await $.process.run(['sh', '-c', 'if [ "$CLAUDE_CODE_REMOTE" = true ] || [ -d /root/.ccr ]; then [ -f "$1/cloud/drive.sh" ] && echo cloud; fi', 'sh', cwd], { timeoutMs: 5000 })
+        if (r.exitCode === 0 && r.stdout.trim() === 'cloud') cloudRoot = cwd
+      } catch { /* Windows / no sh: not a cloud session */ }
+    }
     await $.command.register({ name: 'vp', description: 'Mở ô văn phòng pixel: tiến độ, lỗi và việc chờ duyệt của các quy trình đang chạy' })
     void $.ui.open({ id: PANE, title: TITLE })
     void refresh($)
@@ -445,5 +487,12 @@ export const register: Register = on => {
   on('tool.call', { tool: 'Bash' }, async ($, e, next) => {
     try { await claim($, String((e as any).command ?? '')) } catch { /* never block the command */ }
     return next(e)
+  })
+
+  // CLOUD film session: every tool call Claude makes goes to the office live (via Drive), costing no tokens
+  on('tool.call', async ($, e, next) => {
+    const r = await next(e)
+    if (cloudRoot) { try { report($, e) } catch { /* never disturb the session */ } }
+    return r
   })
 }
