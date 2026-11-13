@@ -213,7 +213,6 @@ const CAST = {
   tech: { hair: '#263238', hairD: '#121A1F', shirt: '#546E7A', shirtD: '#37474F', shirtL: '#78909C', tie: '#FFB300', style: 0, glasses: true },
   qa: { hair: '#6D4C41', hairD: '#3E2A24', shirt: '#43A047', shirtD: '#2E7D32', shirtL: '#66BB6A', tie: '#FFFFFF', style: 3, glasses: true },
   courier: { hair: '#5D4037', hairD: '#3A251F', shirt: '#FB8C00', shirtD: '#E65100', shirtL: '#FFB74D', tie: '#FFE0B2', style: 2, pants: '#4E342E' },
-  guest: { hair: '#7B1F4E', hairD: '#4A0C2C', shirt: '#EC407A', shirtD: '#C2185B', shirtL: '#F48FB1', tie: '#FCE4EC', style: 1 },
 };
 const sprites = {};
 for (const [k, c] of Object.entries(CAST)) {

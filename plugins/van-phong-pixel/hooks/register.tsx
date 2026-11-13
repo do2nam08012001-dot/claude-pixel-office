@@ -46,8 +46,6 @@ let ticks = 0, driveCache: Film[] = [], driveError = ''
 const flags = new Map<string, string>()
 // last scene: reuse the same SVG while nothing visible changed, so the pane does not reload (flash)
 let sceneKey = '', sceneSvg = ''
-// the office is two pictures (top / bottom half) stacked in the flow; kept joined by SEP
-const SEP = '\u0001'
 // double buffer: the old scene stays on top (overlay) while the new one loads underneath, then the overlay goes
 let shownSvg = '', overlaySvg = '', swapping = false
 
@@ -362,13 +360,13 @@ function describe(e: any): string {
   if (tool === 'Agent' || tool === 'Task') return `Giao việc: ${String(e.description ?? '').slice(0, 50)}`
   return tool.replace(/^mcp__[^_]+__/, '')
 }
-let etaAsks = 0, etaSeen = false, lastEnsure = 0
+let etaAsks = 0, lastEnsure = 0
 const STAGE_MARK = /drive\.sh["']?\s+mark\s+(start|inputs|research_done|plan_done|render_start|render_done)\b([^\n;&|]*)/
 function askEta($: any, command: string) {
-  if (/drive\.sh["']?\s+mark\s+eta\s+\d/.test(command) || /drive\.sh["']?\s+mark\s+note\s+.*\s\d+(\.\d+)?\s*$/m.test(command)) { etaSeen = true; return }
+  if (/drive\.sh["']?\s+mark\s+eta\s+\d/.test(command) || /drive\.sh["']?\s+mark\s+note\s+.*\s\d+(\.\d+)?\s*$/m.test(command)) return
   const m = STAGE_MARK.exec(command)
   if (!m) return
-  if (/\s\d+(\.\d+)?\s*["']?\s*$/.test(m[2])) { etaSeen = true; return }
+  if (/\s\d+(\.\d+)?\s*["']?\s*$/.test(m[2])) return
   if (etaAsks >= 3) return
   etaAsks++
   void $.prompt.submit({ text: `(Văn phòng hỏi ${etaAsks}/3) Người dùng cần giờ xong chính xác: ước còn bao nhiêu phút nữa thì xong CẢ phim, tính từ bây giờ? Trả lời bằng một lệnh: bash cloud/drive.sh mark eta <phút>, rồi làm tiếp việc đang dở. Từ giờ ghi kèm số phút ở cuối mỗi lệnh mark <bước> "" <phút>.` }).catch(() => {})

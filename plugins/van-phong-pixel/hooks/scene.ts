@@ -1,4 +1,4 @@
-// @ts-nocheck — pixel office scene (SVG paths + CSS animation, no images, no script). Source: art-source/scene7.mjs
+// @ts-nocheck — pixel office scene (SVG paths + CSS animation, no images, no script). Art: art-source/build4.mjs
 // v4 scene (256x256) — pure function of the pipeline state; CSS animation only (no script).
 // state: { stage, render, plan, research, blocked, approval, bench }
 //   stage: idle | inputs | research | plan | render | qa | deliver | done
@@ -182,7 +182,7 @@ export function officeSvg(A, s = {}) {
   if (done) top += bubble('ok', 223, 50) + G([['#FFD54F', 180], ['#FF8A80', 196], ['#81D4FA', 214], ['#A5D6A7', 232], ['#CE93D8', 248], ['#FFD54F', 120], ['#FF8A80', 60], ['#81D4FA', 20]].map(([c, x], i) => rect(x, 0, 2, 3, c, `conf k${i % 4}`)).join(''))
     + G([[200, 60], [238, 64], [206, 96], [244, 92]].map(([x, y], i) => `<path d="M${x} ${y - 3}v6M${x - 3} ${y}h6" stroke="#FFF59D" stroke-width="1" class="spark s${i % 2}"/>`).join(''));
   back += tag(224, 112, 'Chủ tịch', st.approval || done, '#7A4A2E');
-  const BREAK = 120;   // shared idle cycle (s), two halves of meetings; everyone on break meets on the same beat
+  const BREAK = 120;   // the cat's walk cycle (s)
   // a different look each time the scene is built: props and emotes are picked at random,
   // and the whole break routine starts at a random point of its cycle
   const breakAt = Math.round((NOW_S + rnd() * BREAK) % BREAK);
