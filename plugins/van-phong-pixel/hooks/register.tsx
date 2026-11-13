@@ -63,7 +63,7 @@ const dur = (s: number) => (s < 90 ? `${Math.max(1, Math.round(s))} giây` : s <
 const clock = (ms: number) => { const d = new Date(ms); return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}` }
 
 type StepView = Step & { state: 'done' | 'now' | 'wait'; took?: number; elapsed?: number; left?: number | null; guess?: number | null; w: number }
-type View = { over: boolean; steps: StepView[]; idx: number; allDone: boolean; progress: number; frac: number; scene: any; total: number; remaining: number | null; known: boolean }
+type View = { over: boolean; overdue: number; steps: StepView[]; idx: number; allDone: boolean; progress: number; frac: number; scene: any; total: number; remaining: number | null; known: boolean }
 
 function view(f: Film, now: number): View {
   let steps: Step[], idx: number, allDone: boolean, progress: number, scene: any
@@ -85,7 +85,7 @@ function view(f: Film, now: number): View {
     // share of the current stage: render %, the cloud's notes (research / plan), upload % (inputs)
     const pk = f.stage === 'render' ? f.render : f.stage === 'plan' ? f.plan : f.stage === 'research' ? f.research : f.progress
     progress = Math.max(0, Math.min(1, pk ?? 0))
-    scene = legacy(f)
+    scene = legacy(f.stage === 'render' && (f.render ?? 0) >= 0.999 ? { ...f, stage: 'qa' } : f)
   }
   let h = f.history ?? {}
   if (f.stage === 'render' && (f.render ?? 0) >= 0.999 && h.render?.start) { const e = h.render.end ?? f.updated; h = { ...h, render: { start: h.render.start, end: e }, qa: h.qa ?? { start: e } } }
@@ -134,7 +134,9 @@ function view(f: Film, now: number): View {
   const curNeed = cur ? (cur.left != null && cur.left > 0 ? cur.left : Math.max(60, spentCur * 0.1)) : 0
   let curLeft = curNeed
   const fin = finish.get(f.slug)
-  if (fin && !allDone) {
+  let overdue = 0
+  if (fin && !allDone && fin < now) overdue = (now - fin) / 1000
+  if (fin && !allDone && !overdue) {
     // Claude's own estimate of the whole film: split what is left between this step and the later ones
     remaining = Math.max(60, (fin - now) / 1000); known = true; over = false
     const fut = futW(), share = curNeed + fut > 0 ? curNeed / (curNeed + fut) : 1
@@ -144,8 +146,9 @@ function view(f: Film, now: number): View {
   }
   if (cur) {
     cur.w = Math.max(1, spentCur + curLeft); cur.left = curLeft
-    frac = progress > 0.03 && !fin ? progress : Math.min(0.99, spentCur / cur.w)
-    if (progress > 0.03 && !fin) cur.w = Math.max(cur.w, spentCur / Math.max(0.01, progress))
+    const useP = progress > 0.03 && (!fin || overdue > 0)
+    frac = useP ? progress : Math.min(0.99, spentCur / cur.w)
+    if (useP) cur.w = Math.max(cur.w, spentCur / Math.max(0.01, progress))
   }
   const W = sv.reduce((a, s) => a + s.w, 0) || 1
   const doneW = sv.reduce((a, s) => a + (s.state === 'done' ? s.w : 0), 0)
@@ -153,7 +156,7 @@ function view(f: Film, now: number): View {
   if (!fin && !over) remaining = known ? Math.max(0, W - doneW - (cur ? cur.w * frac : 0)) : remaining
   // the HP bar starts at the same share and fills exactly when the step should end
   scene = { ...scene, progress: frac, rate: curLeft > 0 ? (1 - frac) / curLeft : 0 }
-  return { over, steps: sv, idx, allDone, progress, frac, scene, total: allDone ? 1 : Math.min(0.99, total), remaining: known ? remaining : null, known }
+  return { over, overdue, steps: sv, idx, allDone, progress, frac, scene, total: allDone ? 1 : Math.min(0.99, total), remaining: overdue ? null : known ? remaining : null, known }
 }
 
 // Pull complete JSON objects out of concatenated text (rclone cat joins files; files may be pretty-printed).
@@ -266,6 +269,7 @@ async function refreshInner($: any) {
     if (!target || isDone(f)) { finish.delete(f.slug); continue }
     const cur = finish.get(f.slug), nowT = Date.now()
     if (!cur) { finish.set(f.slug, target); continue }
+    if (cur < nowT || Math.abs(target - cur) > 20 * 60_000) { finish.set(f.slug, target); continue }
     const cap = Math.max(120_000, 0.1 * Math.max(0, cur - nowT))
     finish.set(f.slug, cur + Math.max(-cap, Math.min(cap, target - cur)))
   }
@@ -358,7 +362,7 @@ function describe(e: any): string {
   if (tool === 'Agent' || tool === 'Task') return `Giao việc: ${String(e.description ?? '').slice(0, 50)}`
   return tool.replace(/^mcp__[^_]+__/, '')
 }
-let etaAsks = 0, etaSeen = false
+let etaAsks = 0, etaSeen = false, lastEnsure = 0
 const STAGE_MARK = /drive\.sh["']?\s+mark\s+(start|inputs|research_done|plan_done|render_start|render_done)\b([^\n;&|]*)/
 function askEta($: any, command: string) {
   if (/drive\.sh["']?\s+mark\s+eta\s+\d/.test(command) || /drive\.sh["']?\s+mark\s+note\s+.*\s\d+(\.\d+)?\s*$/m.test(command)) { etaSeen = true; return }
@@ -387,6 +391,7 @@ async function pump($: any) {
       if (wait > 0) await new Promise<void>(res => $.clock.after(wait, () => res()))
       liveDirty = false; liveLast = Date.now()
       await $.process.run(['bash', `${cloudRoot}/cloud/drive.sh`, 'live', liveAct, liveTodos], { timeoutMs: 40000 })
+      if (Date.now() - lastEnsure > 180_000) { lastEnsure = Date.now(); await $.process.run(['bash', `${cloudRoot}/cloud/drive.sh`, 'ensure'], { timeoutMs: 20000 }).catch(() => {}) }
     }
   } catch { /* offline: the next call tries again */ } finally { livePushing = false }
 }
@@ -459,7 +464,8 @@ async function drawOffice($: any, e: any) {
   const card = (f: Film) => {
     const v = view(f, now), kind = kindOf(f), focused = f.slug === shown?.slug
     const group = GROUP_VI[f.group ?? f.skill ?? ''] ?? f.group ?? f.skill ?? ''
-    const etaText = v.allDone ? 'đã xong' : kind === 'stale' ? 'im lặng — không ước lượng' : v.over ? 'bước này quá dự kiến — chờ cloud báo %' : v.remaining == null ? 'chưa đủ dữ liệu để ước lượng' : `còn ~${dur(v.remaining)} · xong ~${clock(now + v.remaining * 1000)}`
+    const waitEta = f.source === 'drive' && !finish.get(f.slug) && !v.allDone
+    const etaText = v.allDone ? 'đã xong' : kind === 'stale' ? 'im lặng — không ước lượng' : v.overdue ? `quá giờ dự kiến ${dur(v.overdue)} — chờ cloud báo lại` : waitEta ? 'đang chờ Claude ước giờ xong…' : v.over ? 'bước này quá dự kiến — chờ cloud báo %' : v.remaining == null ? 'chưa đủ dữ liệu để ước lượng' : `còn ~${dur(v.remaining)} · xong ~${clock(now + v.remaining * 1000)}`
     const steps: CardStep[] = v.steps.map(s => ({
       label: s.label, role: s.role, state: s.state, w: s.w,
       took: s.took ? dur(s.took) : undefined, elapsed: s.elapsed ? dur(s.elapsed) : undefined,
@@ -522,7 +528,7 @@ async function drawOffice($: any, e: any) {
       <Box flexDirection="row" justifyContent="flex-end">
         <Box flexDirection="row" gap={1}>
           {pixBtn("am-thanh", (await read($, soundOn)) === false ? '♪ Bật tiếng' : '♪ Tắt tiếng', async () => { const on = !((await read($, soundOn)) ?? true); await update($, soundOn, () => on); try { await $.store.set('sound', on) } catch { /* read-only */ } }, 'wood')}
-          {pixBtn("lam-moi", "⟳ Làm mới", () => { lastScrolled = ''; return refresh($) }, 'wood')}
+          {pixBtn("lam-moi", "⟳ Làm mới", () => { ticks = 0; driveError = ''; return refresh($) }, 'wood')}
         </Box>
       </Box>
     </Box>
@@ -544,7 +550,7 @@ export const register: Register = on => {
     if (cwd && cwdSkill) {
       try {
         const r = await $.process.run(['sh', '-c', 'if [ "$CLAUDE_CODE_REMOTE" = true ] || [ -d /root/.ccr ]; then [ -f "$1/cloud/drive.sh" ] && echo cloud; fi', 'sh', cwd], { timeoutMs: 5000 })
-        if (r.exitCode === 0 && r.stdout.trim() === 'cloud') cloudRoot = cwd
+        if (r.exitCode === 0 && r.stdout.trim() === 'cloud') { cloudRoot = cwd; void $.process.run(['bash', `${cwd}/cloud/drive.sh`, 'ensure'], { timeoutMs: 20000 }).catch(() => {}) }
       } catch { /* Windows / no sh: not a cloud session */ }
     }
     await $.command.register({ name: 'vp', description: 'Mở ô văn phòng pixel: tiến độ, lỗi và việc chờ duyệt của các quy trình đang chạy' })
