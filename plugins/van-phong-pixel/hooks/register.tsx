@@ -198,7 +198,7 @@ function summary(list: Film[], now: number) {
   return list.slice(0, 8).map(f => {
     const v = view(f, now), cur = v.idx >= 0 && v.idx < v.steps.length ? v.steps[v.idx] : null
     const state = f.blocked ? 'LỖI' : f.approval ? 'CHỜ DUYỆT' : v.allDone ? 'XONG' : 'đang làm'
-    const eta = v.allDone ? '' : v.remaining != null ? ` · còn ~${dur(v.remaining)}` : ''
+    const eta = v.allDone ? '' : v.overdue ? ` · quá giờ dự kiến ${dur(v.overdue)}` : v.remaining != null ? ` · còn ~${dur(v.remaining)}` : ''
     return `• ${f.title || f.slug} — ${state} · ${Math.round(v.total * 100)}%${cur ? ` · bước ${v.idx + 1}/${v.steps.length} ${cur.label}` : ''}${eta}${f.message ? ` · ${f.message}` : ''}`
   }).join('\n')
 }
@@ -391,7 +391,7 @@ async function pump($: any) {
       if (wait > 0) await new Promise<void>(res => $.clock.after(wait, () => res()))
       liveDirty = false; liveLast = Date.now()
       await $.process.run(['bash', `${cloudRoot}/cloud/drive.sh`, 'live', liveAct, liveTodos], { timeoutMs: 40000 })
-      if (Date.now() - lastEnsure > 180_000) { lastEnsure = Date.now(); await $.process.run(['bash', `${cloudRoot}/cloud/drive.sh`, 'ensure'], { timeoutMs: 20000 }).catch(() => {}) }
+      if (Date.now() - lastEnsure > 180_000) { lastEnsure = Date.now(); void $.process.run(['bash', `${cloudRoot}/cloud/drive.sh`, 'ensure'], { timeoutMs: 20000 }).catch(() => {}) }
     }
   } catch { /* offline: the next call tries again */ } finally { livePushing = false }
 }

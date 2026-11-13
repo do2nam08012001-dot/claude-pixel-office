@@ -11,7 +11,7 @@ const fin = { slug: 'done', skill: 'jp-history-video', title: 'Xong rồi', stag
 const appr = { slug: 'appr', skill: 'jp-history-video', title: 'Chờ duyệt', stage: 'plan', approval: true, message: 'Duyệt storyboard', updated: now, history: { plan: { start: now - 60_000 } } }
 const demo = { slug: 'demo-run', skill: 'jp-history-video', title: 'Demo chạy', stage: 'research', updated: now, history: {} }
 
-function engine(on: any, calls: string[][]) {
+function engine(on: any, calls: string[][], drive?: string) {
   on('command.register', () => ({ value: { command: 'vp' } }))
   on('ui.open', () => ({ value: { isPlaced: true } }))
   on('ui.scroll', () => ({ value: {} }))
@@ -26,7 +26,7 @@ function engine(on: any, calls: string[][]) {
     const argv = (e.argv ?? []) as string[]
     if (argv[0] === 'sh') return { value: { exitCode: 0, stdout: String(argv[4] ?? '').startsWith('/home/user') ? 'cloud' : '', stderr: '' } }
     if (argv[1] === 'lsf') return { value: { exitCode: 0, stdout: 'jp-history-video/', stderr: '' } }
-    if (argv[1] === 'cat') return { value: { exitCode: 0, stdout: JSON.stringify(sony) + JSON.stringify(demo) + JSON.stringify(fin) + JSON.stringify(appr), stderr: '' } }
+    if (argv[1] === 'cat') return { value: { exitCode: 0, stdout: drive ?? JSON.stringify(sony) + JSON.stringify(demo) + JSON.stringify(fin) + JSON.stringify(appr), stderr: '' } }
     return { value: { exitCode: 0, stdout: '', stderr: '' } }
   })
   on('tool.call', () => ({ result: {} }))
@@ -84,3 +84,25 @@ test('approval: the Duyệt button sends the reply', async ($, on) => {
   await ui.unmount()
 })
 
+
+// the time line of a film: overdue estimates are said as such (never "99 %, 60 s left"),
+// no time is invented before Claude gives one, a finished render counts as QA
+test('/vp: overdue, waiting for Claude, render done = QA', async ($, on) => {
+  const t = Date.now()
+  const films = [
+    { slug: 'late', skill: 'jp-history-video', title: 'Trễ', stage: 'plan', finishAt: t - 30 * 60_000, updated: t, history: { inputs: { start: t - 7200_000, end: t - 7000_000 }, plan: { start: t - 7000_000 } } },
+    { slug: 'fresh', skill: 'jp-history-video', title: 'Mới', stage: 'research', updated: t, history: { inputs: { start: t - 120_000, end: t - 60_000 }, research: { start: t - 60_000 } } },
+    { slug: 'qa', skill: 'jp-history-video', title: 'Render xong', stage: 'render', render: 1, finishAt: t + 600_000, updated: t, history: { render: { start: t - 3600_000 } } },
+  ]
+  engine(on, [], films.map(f => JSON.stringify(f)).join(''))
+  await $.session.start({ cwd: 'D:/x/repo-jp-history-video', surface: 'desktop', isInteractive: true })
+  for (const s of ['late', 'fresh', 'qa']) await $.tool.call({ tool: 'Bash', command: `bash local/send.sh ${s} --title "${s}"` })
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  await ui.press({ key: 'lam-moi' })
+  const { text } = await $.command.run({ command: 'vp' })
+  expect(text).toContain('Trễ')
+  expect(text).toMatch(/Trễ[^\n]*quá giờ dự kiến/)
+  expect(text).not.toMatch(/Trễ[^\n]*99%/)
+  expect(text).toMatch(/Render xong[^\n]*bước 5\/6 QA/)
+  await ui.unmount()
+})

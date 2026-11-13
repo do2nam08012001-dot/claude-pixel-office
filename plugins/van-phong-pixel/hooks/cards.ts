@@ -151,15 +151,6 @@ export function headerSvg(W: number, running: number, waits: number, errs: numbe
   return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" shape-rendering="crispEdges"><style>.pl{animation:pl 1.4s ease-in-out infinite}@keyframes pl{50%{opacity:.6}}.led{animation:led .9s steps(1) infinite}@keyframes led{50%{opacity:.25}}text{shape-rendering:auto}</style>${o}</svg>`
 }
 
-export function doneShelfSvg(W: number, rows: { title: string; when: string }[]) {
-  const H = 34 + rows.length * 24
-  let o = frame(0, 0, W, H, PANEL, LINE) + T(16, 22, `Đã xong (${rows.length})`, '#7FE3A5', 13, ' font-weight="700"')
-  rows.forEach((r, i) => {
-    const y = 32 + i * 24
-    o += R(16, y + 3, 12, 12, OUT) + R(17, y + 4, 10, 10, COL.done.main) + T(36, y + 14.5, fit(r.title, W - 110, 12.5), TEXT, 12.5) + TR(W - 16, y + 14.5, r.when, SUB, 12, '', MONO)
-  })
-  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" shape-rendering="crispEdges">${o}</svg>`
-}
 
 // footer strip in the same style: LED "live" and when the office last read the status
 export function footerSvg(W: number, text: string, isError: boolean) {
@@ -171,10 +162,3 @@ export function footerSvg(W: number, text: string, isError: boolean) {
   return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" shape-rendering="crispEdges"><style>.led{animation:led .9s steps(1) infinite}@keyframes led{50%{opacity:.25}}text{shape-rendering:auto}</style>${o}</svg>`
 }
 
-// pixel button face (the label is a plain Button drawn on top, so it stays a real, pressable control)
-export function buttonSvg(w: number, h: number, tone: 'wood' | 'primary' | 'danger') {
-  const f = tone === 'primary' ? ['#1F6E43', '#2E9E5F', '#57C784'] : tone === 'danger' ? ['#7A2328', '#A8343A', '#D9585E'] : [WOOD, WOOD2, WOODHI]
-  const o = R(2, 0, w - 4, h, OUT) + R(0, 2, w, h - 4, OUT) + R(2, 1, w - 4, h - 2, f[0]) + R(1, 2, w - 2, h - 4, f[0])
-    + R(2, 1, w - 4, h - 5, f[1]) + R(1, 3, w - 2, h - 8, f[1]) + R(3, 2, w - 6, 1, f[2])
-  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${w} ${h}" width="${w}" height="${h}" shape-rendering="crispEdges">${o}</svg>`
-}
