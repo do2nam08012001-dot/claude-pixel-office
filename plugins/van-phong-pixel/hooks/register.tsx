@@ -27,10 +27,6 @@ let busy = false, again = false, cwdSkill: string | undefined, skills: string[] 
 // one random seed per session: every redraw of the office picks the same props, moods and routines
 const SEED = Math.floor(Math.random() * 2 ** 31)
 const finish = new Map<string, number>()   // slug -> finish time shown (ms)
-const soundOn = atom({ plugin: 'van-phong-pixel', key: 'soundOn' } as const, true)
-async function sound($: any, name: 'ting' | 'chime') {
-  try { if ((await read($, soundOn)) === false) return; await $.audio.play({ asset: `sounds/${name}.wav` }) } catch { /* no player on this surface */ }
-}
 const paneOpen = atom({ plugin: 'van-phong-pixel', key: 'paneOpen' } as const, false)
 // learned stage durations (seconds, median of the last films) per "skill:stage"; seeds the estimates of new films
 let learned: Record<string, number> = {}
@@ -283,7 +279,7 @@ async function refreshInner($: any) {
     const v = view(f, nowMs), cur = v.idx >= 0 && v.idx < v.steps.length ? v.steps[v.idx] : null, key = cur ? cur.id : v.allDone ? 'done' : 'idle'
     const prev = seen.get(f.slug)
     if (!prev) seen.set(f.slug, { step: key, at: 0 })
-    else if (prev.step !== key) { seen.set(f.slug, cur && v.idx > 0 ? { step: key, from: v.steps[v.idx - 1].role, to: cur.role, at: nowMs } : { step: key, at: 0 }); void sound($, 'ting') }
+    else if (prev.step !== key) { seen.set(f.slug, cur && v.idx > 0 ? { step: key, from: v.steps[v.idx - 1].role, to: cur.role, at: nowMs } : { step: key, at: 0 }) }
   }
   // tell the chairman at once when something needs them or a job is done
   for (const f of list) {
@@ -293,7 +289,6 @@ async function refreshInner($: any) {
         : now === 'wait' ? `Chờ duyệt · ${f.title || f.slug}: ${f.message || 'cần bạn trả lời'} — trả lời ngay trong phiên này`
         : `Xong · ${f.title || f.slug} — gõ "lấy video" để tải về máy`
       try { $.ui.toast(msg) } catch { /* no surface */ }
-      void sound($, 'chime')
       void $.ui.notify(msg, { title: 'Văn phòng' }).catch(() => { /* notifications off */ })
     }
     flags.set(f.slug, now)
@@ -450,15 +445,9 @@ async function drawOffice($: any, e: any) {
   const KIND_T = { err: 'Lỗi', wait: 'Chờ duyệt', done: 'Xong', stale: 'Im lặng', run: 'Đang làm' }
   const W = Math.max(240, px)
   // a pixel button: the face is drawn, a plain Button on top keeps it a real control (keyboard, presses, tests)
-  const pixBtn = (key: string, label: string, onPress: () => any, tone: 'wood' | 'primary' | 'danger' = 'wood') => {
-    // a wooden plate (box colour + dark border) around a plain Button: no picture on top of it, so nothing can drift
-    const bg = tone === 'primary' ? '#2E7D4F' : tone === 'danger' ? '#8E2F35' : '#7A4A2E'
-    return (
-      <Box key={key + '-box'} backgroundColor={bg} borderStyle="bold" borderColor="#2A1E1E" paddingX={1}>
-        <Button key={key} plain label={label} onPress={onPress}><Text color="#FFF3D6" bold mono>{label.toUpperCase()}</Text></Button>
-      </Box>
-    )
-  }
+  // plain app buttons: a Button wrapped in a coloured Box did not take clicks on the desktop and threw the pane to the top
+  const pixBtn = (key: string, label: string, onPress: () => any, tone: 'wood' | 'primary' | 'danger' = 'wood') =>
+    <Button key={key} label={label} onPress={onPress} variant={tone === 'primary' ? 'primary' : undefined} />
   const card = (f: Film) => {
     const v = view(f, now), kind = kindOf(f), focused = f.slug === shown?.slug
     const group = GROUP_VI[f.group ?? f.skill ?? ''] ?? f.group ?? f.skill ?? ''
@@ -525,7 +514,6 @@ async function drawOffice($: any, e: any) {
       {Svg ? <Svg source={footerSvg(W, p.error ? p.error : p.at ? `cập nhật ${dur((now - p.at) / 1000)} trước · làm mới mỗi 5 giây` : 'đang đọc trạng thái…', !!p.error)} alt={p.error || 'Văn phòng đang cập nhật trực tiếp'} /> : <Text dimColor>{p.error || 'Đang cập nhật'}</Text>}
       <Box flexDirection="row" justifyContent="flex-end">
         <Box flexDirection="row" gap={1}>
-          {pixBtn("am-thanh", (await read($, soundOn)) === false ? '♪ Bật tiếng' : '♪ Tắt tiếng', async () => { const on = !((await read($, soundOn)) ?? true); await update($, soundOn, () => on); try { await $.store.set('sound', on) } catch { /* read-only */ } }, 'wood')}
           {pixBtn("lam-moi", "⟳ Làm mới", () => { ticks = 0; driveError = ''; return refresh($) }, 'wood')}
         </Box>
       </Box>
@@ -537,7 +525,6 @@ async function drawOffice($: any, e: any) {
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     const cwd = String((e as any).cwd ?? '')
-    try { const sv = await $.store.get('sound'); if (sv === false) await update($, soundOn, () => false) } catch { /* default on */ }
     ownKey = `owned:${String((e as any).session_id ?? (e as any).sessionId ?? cwd)}`
     try {
       const saved = (await $.store.get(ownKey)) as Owned[] | undefined
