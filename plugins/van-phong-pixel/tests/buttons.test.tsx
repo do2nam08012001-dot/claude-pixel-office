@@ -1,5 +1,5 @@
 import { expect, test } from 'claude-code/testing'
-import { wheelOffset } from '../hooks/register'
+import { wheelOffset, isJump } from '../hooks/register'
 
 const PANE = {
   plugin: 'van-phong-pixel', component: 'Pane', requestId: 'van-phong',
@@ -243,6 +243,10 @@ test('pane: a wheel tick never scrolls against its direction', () => {
   expect(wheelOffset(-3, 50, 40)).toBe(37)   // up, engine said further down
   expect(wheelOffset(3, 43, 40)).toBe(43)    // normal tick untouched
   expect(wheelOffset(-3, 0, 2)).toBe(0)
+  const P = { kind: 'person' }
+  expect(isJump('desktop', { origin: P, by: -5, offset: 0 }, 5)).toBe(true)                    // the jump the log showed
+  expect(isJump('desktop', { origin: P, by: -5, offset: 0, pointer: { row: 3 } }, 5)).toBe(false) // a real wheel tick up
+  expect(isJump('terminal', { origin: P, by: -5, offset: 0 }, 5)).toBe(false)                   // Home key in the terminal
 })
 
 // Onkyo: research 27 min, plan done in 43 s, render just started, Claude says 5 h more: the % is time worked ÷ (worked + left),

@@ -494,8 +494,10 @@ async function learn($: any, list: Film[]) {
 }
 
 // shortcut: the last 60 scroll/focus moves of the pane go to ~/.claude/van-phong/scroll.log to diagnose the jump to the top; drop once fixed
-let paneOffset = 0, scrollLines: string[] = []
+let paneOffset = 0, paneSurface = "", scrollLines: string[] = []
 /** where a person's wheel tick lands: never against its own direction from the offset the pane shows now */
+/** the desktop's jump to the top after a press: a person's move with no pointer (not the wheel) landing on row 0 */
+export const isJump = (surface: string, s: any, cur: number) => surface === 'desktop' && s.origin?.kind === 'person' && !s.pointer && s.offset === 0 && s.by < 0 && cur > 0
 export const wheelOffset = (by: number, offset: number, cur: number) => (by > 0 && offset < cur) || (by < 0 && offset > cur) ? Math.max(0, cur + by) : offset
 async function scrollLog($: any, line: string) {
   scrollLines = [...scrollLines, `${new Date().toISOString().slice(11, 19)} ${line}`].slice(-60)
@@ -670,6 +672,7 @@ export const register: Register = on => {
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const o = (e.props as any)?.scroll?.offset
     if (typeof o === 'number') paneOffset = o
+    paneSurface = String((e as any).surface ?? '')
     return drawOffice($, e)
   })
 
@@ -677,8 +680,12 @@ export const register: Register = on => {
   // back to the top on every tick: a wheel tick never moves against its own direction
   on('ui.scroll', { requestId: PANE }, async ($, e, next) => {
     const s: any = e
+    // the log showed every tick followed by a jump to the top (by = -offset): on the desktop a move with no pointer
+    // (not the wheel) that lands on the top is that jump, and is refused
+    const jump = isJump(paneSurface, s, paneOffset)
+    void scrollLog($, `scroll ${s.origin?.kind ?? '?'}${s.origin?.name ? ':' + s.origin.name : ''} ptr=${s.pointer ? s.pointer.row : '-'} by=${s.by} offset=${s.offset} cur=${paneOffset} rows=${s.bodyRows}/${s.contentRows}${jump ? ' DENIED' : ''}`)
+    if (jump) return { deny: 'not the wheel: the pane keeps its place' } as any
     const want = s.origin?.kind === 'person' ? wheelOffset(s.by, s.offset, paneOffset) : s.offset
-    void scrollLog($, `scroll by=${s.by} offset=${s.offset} cur=${paneOffset} rows=${s.bodyRows}/${s.contentRows}${want !== s.offset ? ' FIXED' : ''}`)
     const r = await next({ ...s, offset: want })
     if (!(r as any)?.deny) paneOffset = want
     return r
