@@ -5,6 +5,8 @@ import type { Film, Role, Step } from '../types'
 import { legacy } from './scene'
 
 export const STALE_MS = 15 * 60_000
+/** raise it with any change to the numbers below; the case table carries the same value and the widget's port checks it */
+export const TIMELINE_VERSION = 1
 // Legacy video pipeline (v1 status files of the jp video repos); est = rough seconds per stage
 export const VIDEO_STEPS: Step[] = [
   { id: 'inputs', label: 'Nhận đầu vào', role: 'fetch', est: 120 }, { id: 'research', label: 'Nghiên cứu', role: 'research', est: 1800 },
@@ -141,4 +143,4 @@ export function timeline(f: Film, now0: number, ctx: TimelineCtx = {}): View & {
 }
 
 /** the step model the plugin hands the taskbar widget, so it can go on by itself from the Drive status */
-export const liveSteps = (v: View) => v.steps.map(s => ({ id: s.id, work: Math.round(s.work), guess: Math.round(s.state === 'wait' ? (s.guess ?? s.work) : s.state === 'now' ? (s.est ?? s.work) : 0) }))
+export const liveSteps = (v: View) => v.steps.map(s => ({ id: s.id, work: Math.round(s.work), guess: Math.round(s.state === 'wait' ? (s.guess ?? s.work) : s.state === 'now' ? (s.est ?? s.work) : 0), est: s.est == null ? null : Math.round(s.est) }))

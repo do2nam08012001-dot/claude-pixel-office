@@ -1,5 +1,5 @@
 import { expect, test } from 'claude-code/testing'
-import { timeline, liveSteps } from '../hooks/timeline'
+import { timeline, liveSteps, TIMELINE_VERSION } from '../hooks/timeline'
 // the table is JSON after `export default ` (tests import code only; the widget reads it as JSON)
 import table from '../taskbar/timeline-cases.mjs'
 
@@ -17,6 +17,8 @@ const out = (c: any, at: number) => {
   return { pct: Math.round(v.total * 100), remaining: v.remaining == null ? null : Math.round(v.remaining), step: cur, model: liveSteps(v) }
 }
 const inRange = (x: number | null, r: any) => r === null ? x === null : x !== null && x >= r[0] && (r[1] == null || x <= r[1])
+
+test('timeline: the case table is for this version of timeline.ts', () => { expect(table.version).toBe(TIMELINE_VERSION) })
 
 for (const c of table.cases as any[]) {
   test(`timeline: ${c.name}`, () => {

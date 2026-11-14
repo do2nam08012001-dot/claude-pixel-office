@@ -226,14 +226,14 @@ test('Windows: the widget button turns the taskbar widget on (writes the switch,
   const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
   expect(await ui.find({ type: 'Button', key: 'widget' })).toBeTruthy()
   await ui.press({ key: 'widget' })
-  // one widget per session: its own switch, its own live file, launched with --session <key>
-  const sw = [...files.keys()].find(k => /\/\.claude\/van-phong\/widget-.+\.json$/.test(k))!
-  const key = /widget-(.+)\.json$/.exec(sw)![1]
+  // one widget for every session: one switch, launched without --session; this session's films in its own live file
+  const sw = 'C:/Users/t/.claude/van-phong/widget.json'
   expect(JSON.parse(files.get(sw)!).on).toBe(true)
-  expect(JSON.parse(files.get('C:/Users/t/.claude/van-phong/widget.json')!).on).toBe(false)   // an old all-sessions widget closes
-  expect(calls.some(a => a[0] === 'powershell' && a.join(' ').includes('Start-Process') && a.join(' ').includes('--session'))).toBe(true)
-  const live = files.get(`C:/Users/t/.claude/van-phong/live/${key}.json`)
-  expect(live && JSON.parse(live).jobs[0].slug).toBe('sony')
+  const run = calls.find(a => a[0] === 'powershell' && a.join(' ').includes('Start-Process'))
+  expect(run && !run.join(' ').includes('--session')).toBe(true)
+  const live = [...files.entries()].find(([k]) => k.includes('/.claude/van-phong/live/'))
+  expect(live && JSON.parse(live[1]).jobs[0].slug).toBe('sony')
+  expect(JSON.parse(live![1]).jobs[0].steps[0].est).toBe(120)   // est for the widget's own reading (after learned)
   await ui.press({ key: 'widget' })
   expect(JSON.parse(files.get(sw)!).on).toBe(false)
   await ui.unmount()
