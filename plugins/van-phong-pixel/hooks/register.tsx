@@ -223,16 +223,18 @@ const stopWhy = (f: Film) => !f.claudeStop ? '' : f.claudeStop.reason === 'rate_
 const isDone = (f: Film) => !!f.done || f.step === 'done' || f.stage === 'done'
 
 // ---- taskbar widget (Windows only): taskbar/vp_taskbar.pyw draws the boss room above the taskbar with one % and one
-// finish time. On/off lives in ~/.claude/van-phong/widget.json (the pane button and the widget's own "Tắt" both write
-// it); each session writes its films to ~/.claude/van-phong/live/<session>.json while the widget is on.
+// finish time. One widget per session, showing that session's films only: on/off lives in
+// ~/.claude/van-phong/widget-<session>.json (the pane button and the widget's own "Tắt" both write it), and the
+// session writes its films to ~/.claude/van-phong/live/<session>.json while its widget is on.
 const isWin = (h: string) => /^[A-Za-z]:[\\/]/.test(h)
+const sessKey = () => (ownKey || 'session').replace(/[^A-Za-z0-9_-]/g, '_')
 async function widgetSaysOn($: any, dir: string): Promise<boolean> {
-  try { return JSON.parse(await $.fs.read(`${dir}/widget.json`)).on === true } catch { return false }
+  try { return JSON.parse(await $.fs.read(`${dir}/widget-${sessKey()}.json`)).on === true } catch { return false }
 }
 async function launchWidget($: any): Promise<boolean> {
   // python.org's pythonw first; the Microsoft Store alias in WindowsApps would open the Store, so it is skipped
-  const ps = "$p = @((Get-ChildItem \"$env:LOCALAPPDATA\\Programs\\Python\\Python3*\\pythonw.exe\" -EA 0 | Sort-Object FullName | Select-Object -Last 1).FullName, (Get-Command pyw -EA 0).Source, (Get-Command pythonw -EA 0 | Where-Object { $_.Source -notlike '*WindowsApps*' }).Source) | Where-Object { $_ } | Select-Object -First 1; if (-not $p) { exit 3 }; Start-Process -FilePath $p -ArgumentList ('\"' + $env:VP_PYW + '\"')"
-  try { return (await $.process.run(['powershell', '-NoProfile', '-Command', ps], { timeoutMs: 20000, env: { VP_PYW: `${$.plugin.root}/taskbar/vp_taskbar.pyw` } })).exitCode === 0 } catch { return false }
+  const ps = "$p = @((Get-ChildItem \"$env:LOCALAPPDATA\\Programs\\Python\\Python3*\\pythonw.exe\" -EA 0 | Sort-Object FullName | Select-Object -Last 1).FullName, (Get-Command pyw -EA 0).Source, (Get-Command pythonw -EA 0 | Where-Object { $_.Source -notlike '*WindowsApps*' }).Source) | Where-Object { $_ } | Select-Object -First 1; if (-not $p) { exit 3 }; Start-Process -FilePath $p -ArgumentList ('\"' + $env:VP_PYW + '\"'), '--session', $env:VP_SESSION"
+  try { return (await $.process.run(['powershell', '-NoProfile', '-Command', ps], { timeoutMs: 20000, env: { VP_PYW: `${$.plugin.root}/taskbar/vp_taskbar.pyw`, VP_SESSION: sessKey() } })).exitCode === 0 } catch { return false }
 }
 async function writeLive($: any, dir: string, list: Film[], drive = DEFAULT_DRIVE) {
   const on = await widgetSaysOn($, dir)
@@ -250,18 +252,19 @@ async function writeLive($: any, dir: string, list: Film[], drive = DEFAULT_DRIV
       steps: v.steps.map(s => ({ id: s.id, work: Math.round(s.work), guess: Math.round(s.state === 'wait' ? (s.guess ?? s.work) : s.state === 'now' ? (s.est ?? s.work) : 0) })) }
   })
   const rclone = ((await $.store.get('rclone')) as string | undefined) ?? ''
-  try { await $.fs.write(`${dir}/live/${(ownKey || 'session').replace(/[^A-Za-z0-9_-]/g, '_')}.json`, JSON.stringify({ updated: now, drive, rclone, jobs })) } catch { /* read-only home */ }
+  try { await $.fs.write(`${dir}/live/${sessKey()}.json`, JSON.stringify({ updated: now, drive, rclone, jobs })) } catch { /* read-only home */ }
 }
 async function toggleWidget($: any) {
   const h = await home($)
   if (!isWin(h)) return
   const dir = `${h}/.claude/van-phong`, on = !(await widgetSaysOn($, dir))
-  await $.fs.write(`${dir}/widget.json`, JSON.stringify({ on }))
+  await $.fs.write(`${dir}/widget-${sessKey()}.json`, JSON.stringify({ on }))
+  try { await $.fs.write(`${dir}/widget.json`, JSON.stringify({ on: false })) } catch { /* closes a 0.22 widget (all sessions in one) */ }
   await update($, widgetOn, () => on)
   if (!on) return                      // the widget sees the switch within 2 s and closes itself
   await writeLive($, dir, (await read($, films)) ?? [])
   if (!(await launchWidget($))) {
-    await $.fs.write(`${dir}/widget.json`, JSON.stringify({ on: false })); await update($, widgetOn, () => false)
+    await $.fs.write(`${dir}/widget-${sessKey()}.json`, JSON.stringify({ on: false })); await update($, widgetOn, () => false)
     try { $.ui.toast('Không chạy được widget: máy chưa có Python (python.org) để chạy pythonw') } catch { /* no surface */ }
   }
 }
@@ -633,7 +636,13 @@ export const register: Register = on => {
       if (saved?.length) await update($, owned, (o: Owned[]) => [...(o ?? []), ...saved.filter(s => !(o ?? []).some(x => x.slug === s.slug))]); void keep($)
     } catch { /* first start */ }
     // the widget was left on: bring it back with the session (one instance only, the widget checks)
-    void (async () => { const h = await home($); if (isWin(h) && await widgetSaysOn($, `${h}/.claude/van-phong`)) await launchWidget($) })().catch(() => {})
+    void (async () => {
+      const h = await home($), dir = `${h}/.claude/van-phong`
+      if (!isWin(h)) return
+      // an all-sessions widget of 0.22 and older was on: this session's own widget takes over
+      try { if (JSON.parse(await $.fs.read(`${dir}/widget.json`)).on === true) { await $.fs.write(`${dir}/widget.json`, JSON.stringify({ on: false })); await $.fs.write(`${dir}/widget-${sessKey()}.json`, JSON.stringify({ on: true })) } } catch { /* none */ }
+      if (await widgetSaysOn($, dir)) await launchWidget($)
+    })().catch(() => {})
     cwdSkill = /explainer/.test(cwd) ? 'jp-explainer-video' : /history-video/.test(cwd) ? 'jp-history-video' : undefined
     // a cloud session of a video repo reports Claude's work live (the PC's office reads it from Drive)
     if (cwd && cwdSkill) {

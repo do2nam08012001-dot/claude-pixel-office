@@ -11,9 +11,12 @@ from datetime import datetime
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 HOME = os.path.join(os.path.expanduser('~'), '.claude', 'van-phong')
-DEMO = sys.argv[1] if len(sys.argv) > 1 else ''
-LIVE, SWITCH = os.path.join(HOME, 'live'), os.path.join(HOME, 'widget.json')
-POSF = os.path.join(HOME, 'taskbar.json')
+# one widget per Claude session: `--session <key>` shows only that session's films (live/<key>.json)
+SESS = sys.argv[2] if len(sys.argv) > 2 and sys.argv[1] == '--session' else ''
+DEMO = sys.argv[1] if len(sys.argv) > 1 and not SESS else ''
+SUF = '-' + SESS if SESS else ''
+LIVE, SWITCH = os.path.join(HOME, 'live'), os.path.join(HOME, f'widget{SUF}.json')
+POSF = os.path.join(HOME, f'taskbar{SUF}.json')
 KEY = '#FF00FE'                      # transparent colour of the window
 WOOD, EDGE, HI, INK, GOLD = '#7A4A2E', '#2A1E1E', '#9C6440', '#FFF3D6', '#F3D98B'
 LED = {'run': '#5FD068', 'wait': '#F2B84B', 'stop': '#F2B84B', 'err': '#E5534B', 'done': '#5FD068', 'stale': '#8A8A8A', 'idle': '#6B7A99'}
@@ -30,7 +33,7 @@ EMO = {
 
 # one instance only (the plugin may launch it more than once)
 k32 = ctypes.windll.kernel32
-_mutex = k32.CreateMutexW(None, False, 'van-phong-pixel-taskbar')
+_mutex = k32.CreateMutexW(None, False, 'van-phong-pixel-taskbar' + SUF)
 if k32.GetLastError() == 183: sys.exit(0)
 try: ctypes.windll.shcore.SetProcessDpiAwareness(1)   # crisp pixels on scaled screens
 except Exception: pass
@@ -139,7 +142,7 @@ def load():
     if not DEMO and switched_off(): os._exit(0)    # quit at once: pending redraws would hit a destroyed canvas
     now = time.time() * 1000
     best = {}                                       # slug -> (job, file updated, rclone, drive)
-    files = [DEMO] if DEMO else [os.path.join(LIVE, n) for n in (os.listdir(LIVE) if os.path.isdir(LIVE) else []) if n.endswith('.json')]
+    files = [DEMO] if DEMO else [os.path.join(LIVE, SESS + '.json')] if SESS else [os.path.join(LIVE, n) for n in (os.listdir(LIVE) if os.path.isdir(LIVE) else []) if n.endswith('.json')]
     for f in files:
         try:
             d = json.load(open(f, encoding='utf-8')); u = d.get('updated', os.path.getmtime(f) * 1000)
@@ -386,7 +389,8 @@ def draw():
 def place():
     L, T, Rr, B = work_area()
     try: x, y = json.load(open(POSF, encoding='utf-8'))['pos']
-    except Exception: x, y = Rr - W * Z - 12, B - H * Z
+    # shortcut: a new session's widget starts at one of 4 spots picked by its name, so two may still meet; drag one away
+    except Exception: x, y = Rr - W * Z - 12 - (sum(map(ord, SESS)) % 4) * (W * Z + 8), B - H * Z
     x = max(L, min(Rr - W * Z, x)); y = max(T, min(B - H * Z, y))   # keep it on screen after a resolution change
     root.geometry(f'+{x}+{y}')
 
