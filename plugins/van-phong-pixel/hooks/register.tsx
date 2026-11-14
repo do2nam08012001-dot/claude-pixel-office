@@ -56,7 +56,7 @@ const GROUP_VI: Record<string, string> = { 'jp-history-video': 'video lịch s�
 const dur = (s: number) => (s < 90 ? `${Math.max(1, Math.round(s))} giây` : s < 90 * 60 ? `${Math.round(s / 60)} phút` : `${Math.floor(s / 3600)} giờ ${Math.round((s % 3600) / 60)} phút`)
 const clock = (ms: number) => { const d = new Date(ms); return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}` }
 
-type StepView = Step & { state: 'done' | 'now' | 'wait'; took?: number; elapsed?: number; left?: number | null; guess?: number | null; w: number }
+type StepView = Step & { state: 'done' | 'now' | 'wait'; took?: number; elapsed?: number; left?: number | null; guess?: number | null; w: number; work: number }
 type View = { over: boolean; overdue: number; steps: StepView[]; idx: number; allDone: boolean; progress: number; frac: number; scene: any; total: number; remaining: number | null; known: boolean }
 
 function view(f: Film, now: number): View {
@@ -97,7 +97,7 @@ function view(f: Film, now: number): View {
   const pace = estSum > 0 ? Math.max(0.5, Math.min(3, tookSum / estSum)) : 1
   let over = false
   const sv: StepView[] = steps.map((s, i) => {
-    if (allDone || i < idx) { const took = tooks[i]; return { ...s, state: 'done', took, w: took ?? s.est ?? avg ?? 60 } }
+    if (allDone || i < idx) { const took = tooks[i]; return { ...s, state: 'done', took, w: took ?? s.est ?? avg ?? 60, work: 0 } }
     if (i === idx) {
       const elapsed = h[s.id]?.start ? Math.max(0, (now - h[s.id].start) / 1000) : undefined
       // time left: the job's own ETA, else from the reported share, else the (pace-scaled) estimate while it still holds.
@@ -111,11 +111,11 @@ function view(f: Film, now: number): View {
       // share of the current step done: reported progress, else time spent vs time still expected (never 100 %)
       frac = progress > 0 ? progress : elapsed && left != null ? elapsed / (elapsed + left) : over ? 0.9 : 0
       frac = Math.min(0.95, Math.max(0, frac))
-      return { ...s, state: 'now', elapsed, left, w: s.est ?? avg ?? ((elapsed ?? 0) + (left ?? 0) || 60) }
+      return { ...s, state: 'now', elapsed, left, w: s.est ?? avg ?? ((elapsed ?? 0) + (left ?? 0) || 60), work: 0 }
     }
     const guess = s.est ? s.est * pace : avg
     if (guess == null) known = false; else remaining! += guess
-    return { ...s, state: 'wait', guess, w: guess ?? 60 }
+    return { ...s, state: 'wait', guess, w: guess ?? 60, work: 0 }
   })
   if (allDone) remaining = 0
   // TIME is the unit of every bar: a finished step is as wide as it took, the current one as wide as
@@ -146,7 +146,10 @@ function view(f: Film, now: number): View {
   }
   const W = sv.reduce((a, s) => a + s.w, 0) || 1
   const doneW = sv.reduce((a, s) => a + (s.state === 'done' ? s.w : 0), 0)
-  const total = (doneW + (cur ? cur.w * frac : 0)) / W
+  // % = share of the WORK (each step's usual length), not of the time spent: a step that ran long or a new ETA does not move it
+  for (const s of sv) s.work = s.est ?? avg ?? 60
+  const WW = sv.reduce((a, s) => a + s.work, 0) || 1
+  const total = (sv.reduce((a, s) => a + (s.state === 'done' ? s.work : 0), 0) + (cur ? cur.work * frac : 0)) / WW
   if (!fin && !over) remaining = known ? Math.max(0, W - doneW - (cur ? cur.w * frac : 0)) : remaining
   // the HP bar starts at the same share and fills exactly when the step should end
   scene = { ...scene, progress: frac, rate: curLeft > 0 ? (1 - frac) / curLeft : 0 }
@@ -459,7 +462,7 @@ async function drawOffice($: any, e: any) {
     const waitEta = f.source === 'drive' && !finish.get(f.slug) && !v.allDone
     const etaText = v.allDone ? 'đã xong' : kind === 'stale' ? 'im lặng — không ước lượng' : v.overdue ? `quá giờ dự kiến ${dur(v.overdue)} — chờ cloud báo lại` : waitEta ? 'đang chờ Claude ước giờ xong…' : v.over ? 'bước này quá dự kiến — chờ cloud báo %' : v.remaining == null ? 'chưa đủ dữ liệu để ước lượng' : `còn ~${dur(v.remaining)} · xong ~${clock(now + v.remaining * 1000)}`
     const steps: CardStep[] = v.steps.map(s => ({
-      label: s.label, role: s.role, state: s.state, w: s.w,
+      label: s.label, role: s.role, state: s.state, w: s.work,
       took: s.took ? dur(s.took) : undefined, elapsed: s.elapsed ? dur(s.elapsed) : undefined,
       left: s.state === 'now' && !v.progress && s.est && (s.elapsed ?? 0) > s.est ? `quá dự kiến ${dur((s.elapsed ?? 0) - s.est)}` : s.left != null ? `~${dur(s.left)}` : undefined, guess: s.guess != null ? dur(s.guess) : undefined,
     }))

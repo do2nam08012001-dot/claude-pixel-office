@@ -145,3 +145,19 @@ test('/vp: a reported stop says why and until when', async ($, on) => {
   expect(text).toMatch(/Dừng hạn mức — CLAUDE ĐANG DỪNG \(hết hạn mức · mở lại lúc \d\d:\d\d\)/)
   await ui.unmount()
 })
+
+// % is the share of the work: a planning step that ran 11 h with render still to come is far from done,
+// and a new ETA from Claude does not move the %
+test('/vp: % counts work, not hours spent', async ($, on) => {
+  const t = Date.now()
+  const f = { slug: 'long', skill: 'jp-explainer-video', title: 'Kế hoạch dài', stage: 'plan', finishAt: t + 10_000_000, updated: t, history: { inputs: { start: t - 41_000_000, end: t - 40_900_000 }, research: { start: t - 40_900_000, end: t - 39_600_000 }, plan: { start: t - 39_600_000 } } }
+  engine(on, [], JSON.stringify(f))
+  await $.session.start({ cwd: 'D:/x/repo-jp-explainer-video', surface: 'desktop', isInteractive: true })
+  await $.tool.call({ tool: 'Bash', command: 'bash local/send.sh long --title "long"' })
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  await ui.press({ key: 'lam-moi' })
+  const { text } = await $.command.run({ command: 'vp' })
+  const pct = Number(/Kế hoạch dài[^\n]*?(\d+)%/.exec(text)?.[1])
+  expect(pct).toBeLessThan(50)
+  await ui.unmount()
+})
