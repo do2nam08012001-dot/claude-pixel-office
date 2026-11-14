@@ -316,3 +316,20 @@ test('/vp: no real number in the current step - the % holds still', async ($, on
   expect(pa).toBeLessThan(39)                          // it read 39 % and climbing
   await ui.unmount()
 })
+
+// Onkyo 3: render past its own estimate (2 h, no frame yet), Claude still says 3 h more: it read 88 % (90 % of the work)
+test('/vp: a step past its estimate with no real number - the % stays low', async ($, on) => {
+  const t = Date.now(), H = (s: number) => t - s * 1000
+  const f = { slug: 'oc', skill: 'jp-history-video', title: 'Onkyo C', stage: 'render', render: 0, finishAt: t + 179 * 60_000, updated: t, message: '',
+    history: { inputs: { start: H(8960), end: H(8916) }, research: { start: H(8916), end: H(7236) }, plan: { start: H(7236), end: H(7193) }, render: { start: H(7260) } } }
+  engine(on, [], JSON.stringify(f))
+  await $.session.start({ cwd: 'D:/x/repo-jp-history-video', surface: 'desktop', isInteractive: true })
+  await $.tool.call({ tool: 'Bash', command: 'bash local/send.sh oc --title "oc"' })
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  await ui.press({ key: 'lam-moi' })
+  const { text } = await $.command.run({ command: 'vp' })
+  const pc = Number(/Onkyo C[^\n]*?(\d+)%/.exec(text)?.[1])
+  expect(pc).toBeGreaterThan(0)
+  expect(pc).toBeLessThan(25)
+  await ui.unmount()
+})

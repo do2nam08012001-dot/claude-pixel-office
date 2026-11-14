@@ -156,16 +156,18 @@ function view(f: Film, now: number): View {
   } else if (!allDone && own != null && known) remaining = own
   const rem = overdue ? null : known ? remaining : null
   let total: number, barNow = frac   // barNow: how much of the current step's block the total bar fills
-  if (!allDone && cur && own != null && rem != null) {
+  // no real number for the current step yet (render with no frame or encode, others ≤ 3 %)
+  const noData = f.stage === 'render' ? !enc && !((f.render ?? 0) > 0) : !(progress > 0.03)
+  // a step past its own estimate (own = null) still has Claude's time left: the % stays time-based, not 90 % of the work
+  if (!allDone && cur && rem != null) {
     // % = time worked ÷ (time worked + the time left shown), so the % and "còn … · xong …" always agree; a step that
     // ran far past its estimate with no recorded stop counts its estimate (the card marks it "gồm lúc dừng")
     const guesses = sv.reduce((a, s) => a + (s.state === 'wait' ? (s.guess ?? 0) : 0), 0)
     sv.forEach((s, i) => { s.work = s.state === 'done' ? (tooks[i] != null && !(s.est && tooks[i]! > 3 * s.est && !f.paused) ? tooks[i]! : s.est ?? avg ?? 60) : s.state === 'wait' ? (s.guess ?? 0) : 0 })
     cur.work = Math.max(1, spentCur + Math.max(0, rem - guesses))
     const doneW = sv.reduce((a, s) => a + (s.state === 'done' ? s.work : 0), 0)
-    // no real number for the current step yet (render with no frame or encode, others ≤ 3 %): only up to 10 % of its
-    // estimate counts, so the % does not climb with the clock while Claude's fixed finish time is all there is
-    const noData = f.stage === 'render' ? !enc && !((f.render ?? 0) > 0) : !(progress > 0.03)
+    // no real number: only up to 10 % of the step's estimate counts, so the % does not climb with the clock while
+    // Claude's fixed finish time is all there is
     const counted = noData ? Math.min(spentCur, 0.1 * (cur.est ?? spentCur)) : spentCur
     total = (doneW + counted) / Math.max(1, doneW + spentCur + rem)
     // the first real number never makes the % drop below what the capped one showed
@@ -177,7 +179,7 @@ function view(f: Film, now: number): View {
     // no honest time left: share of the WORK (each step's usual length)
     for (const s of sv) s.work = s.est ?? avg ?? 60
     const WW = sv.reduce((a, s) => a + s.work, 0) || 1
-    total = (sv.reduce((a, s) => a + (s.state === 'done' ? s.work : 0), 0) + (cur ? cur.work * frac : 0)) / WW
+    total = (sv.reduce((a, s) => a + (s.state === 'done' ? s.work : 0), 0) + (cur ? cur.work * (noData ? Math.min(frac, 0.1) : frac) : 0)) / WW
   }
   // the HP bar starts at the same share and fills exactly when the step should end
   scene = { ...scene, progress: frac, rate: curLeft && curLeft > 0 ? (1 - frac) / curLeft : 0 }
