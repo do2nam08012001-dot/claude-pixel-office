@@ -54,7 +54,7 @@ const VIDEO_STEPS: Step[] = [
 ]
 const ROLES: Role[] = ['fetch', 'research', 'plan', 'build', 'check', 'deliver']
 const GROUP_VI: Record<string, string> = { 'jp-history-video': 'video lịch sử', 'jp-explainer-video': 'video explainer' }
-const dur = (s: number) => (s < 90 ? `${Math.max(1, Math.round(s))} giây` : s < 90 * 60 ? `${Math.round(s / 60)} phút` : `${Math.floor(s / 3600)} giờ ${Math.round((s % 3600) / 60)} phút`)
+const dur = (s: number) => (s < 90 ? `${Math.max(1, Math.round(s))} giây` : s < 90 * 60 ? `${Math.round(s / 60)} phút` : `${Math.floor(Math.round(s / 60) / 60)} giờ ${Math.round(s / 60) % 60} phút`)
 const clock = (ms: number) => { const d = new Date(ms); return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}` }
 
 type StepView = Step & { state: 'done' | 'now' | 'wait'; took?: number; elapsed?: number; left?: number | null; guess?: number | null; w: number; work: number }
@@ -152,13 +152,25 @@ function view(f: Film, now: number): View {
     else if (own != null) { remaining = own; known = true }
     else overdue = (now - fin) / 1000
   } else if (!allDone && own != null && known) remaining = own
-  // % = share of the WORK (each step's usual length), not of the time spent: a step that ran long or a new ETA does not move it
-  for (const s of sv) s.work = s.est ?? avg ?? 60
-  const WW = sv.reduce((a, s) => a + s.work, 0) || 1
-  const total = (sv.reduce((a, s) => a + (s.state === 'done' ? s.work : 0), 0) + (cur ? cur.work * frac : 0)) / WW
+  const rem = overdue ? null : known ? remaining : null
+  let total: number
+  if (!allDone && cur && own != null && rem != null) {
+    // % = time worked ÷ (time worked + the time left shown), so the % and "còn … · xong …" always agree; a step that
+    // ran far past its estimate with no recorded stop counts its estimate (the card marks it "gồm lúc dừng")
+    const guesses = sv.reduce((a, s) => a + (s.state === 'wait' ? (s.guess ?? 0) : 0), 0)
+    sv.forEach((s, i) => { s.work = s.state === 'done' ? (tooks[i] != null && !(s.est && tooks[i]! > 3 * s.est && !f.paused) ? tooks[i]! : s.est ?? avg ?? 60) : s.state === 'wait' ? (s.guess ?? 0) : 0 })
+    cur.work = Math.max(1, spentCur + Math.max(0, rem - guesses))
+    const doneW = sv.reduce((a, s) => a + (s.state === 'done' ? s.work : 0), 0)
+    total = (doneW + spentCur) / Math.max(1, doneW + spentCur + rem)
+  } else {
+    // no honest time left: share of the WORK (each step's usual length)
+    for (const s of sv) s.work = s.est ?? avg ?? 60
+    const WW = sv.reduce((a, s) => a + s.work, 0) || 1
+    total = (sv.reduce((a, s) => a + (s.state === 'done' ? s.work : 0), 0) + (cur ? cur.work * frac : 0)) / WW
+  }
   // the HP bar starts at the same share and fills exactly when the step should end
   scene = { ...scene, progress: frac, rate: curLeft && curLeft > 0 ? (1 - frac) / curLeft : 0 }
-  return { over, overdue, steps: sv, idx, allDone, progress, frac, scene, total: allDone ? 1 : Math.min(0.99, total), remaining: overdue ? null : known ? remaining : null, known, rnote }
+  return { over, overdue, steps: sv, idx, allDone, progress, frac, scene, total: allDone ? 1 : Math.min(0.99, total), remaining: rem, known, rnote }
 }
 
 // Pull complete JSON objects out of concatenated text (rclone cat joins files; files may be pretty-printed).

@@ -244,3 +244,23 @@ test('pane: a wheel tick never scrolls against its direction', () => {
   expect(wheelOffset(3, 43, 40)).toBe(43)    // normal tick untouched
   expect(wheelOffset(-3, 0, 2)).toBe(0)
 })
+
+// Onkyo: research 27 min, plan done in 43 s, render just started, Claude says 5 h more: the % is time worked ÷ (worked + left),
+// so a step that ended early does not make it jump (it read 32 %), and 5 h reads "5 giờ 0 phút" (not "4 giờ 60 phút")
+test('/vp: Onkyo - % agrees with the time left, hours never read 60 minutes', async ($, on) => {
+  const t = Date.now(), H = (s: number) => t - s * 1000
+  const f = { slug: 'onk', skill: 'jp-history-video', title: 'Onkyo', stage: 'render', render: 0, finishAt: t + 300 * 60_000 - 500, updated: t,
+    history: { inputs: { start: H(1767), end: H(1723) }, research: { start: H(1723), end: H(103) }, plan: { start: H(103), end: H(60) }, render: { start: H(60) } } }
+  engine(on, [], JSON.stringify(f))
+  await $.session.start({ cwd: 'D:/x/repo-jp-history-video', surface: 'desktop', isInteractive: true })
+  await $.tool.call({ tool: 'Bash', command: 'bash local/send.sh onk --title "onk"' })
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  await ui.press({ key: 'lam-moi' })
+  const { text } = await $.command.run({ command: 'vp' })
+  const pct = Number(/Onkyo[^\n]*?(\d+)%/.exec(text)?.[1])
+  expect(pct).toBeGreaterThanOrEqual(8)
+  expect(pct).toBeLessThanOrEqual(12)
+  expect(text).toMatch(/Onkyo[^\n]*còn ~5 giờ 0 phút/)
+  expect(text).not.toMatch(/60 phút/)
+  await ui.unmount()
+})
