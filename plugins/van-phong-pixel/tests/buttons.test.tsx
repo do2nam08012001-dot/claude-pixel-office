@@ -294,3 +294,25 @@ test('/vp: "Claude đang sửa" is a running film, not an error', async ($, on) 
   expect(await ui.find({ type: 'Button', key: 'sua-fix' })).toBeFalsy()   // no "reply to the error" button
   await ui.unmount()
 })
+
+// Onkyo 2: render 102 min with no frame yet (fixing layout / cut gates), Claude's finish time fixed: the % does not climb
+// with the clock. Film B is film A ten minutes later (everything shifted by 10 min), so both must read the same %.
+test('/vp: no real number in the current step - the % holds still', async ($, on) => {
+  const t = Date.now(), fin = t + 140 * 60_000
+  const mk = (slug: string, title: string, late: number) => {
+    const H = (s: number) => t - late - s * 1000
+    return { slug, skill: 'jp-history-video', title, stage: 'render', render: 0, finishAt: fin - late, updated: t, message: '',
+      history: { inputs: { start: H(7887), end: H(7843) }, research: { start: H(7843), end: H(6163) }, plan: { start: H(6163), end: H(6120) }, render: { start: H(6120) } } }
+  }
+  engine(on, [], JSON.stringify(mk('oa', 'Onkyo A', 0)) + JSON.stringify(mk('ob', 'Onkyo B', -10 * 60_000)))
+  await $.session.start({ cwd: 'D:/x/repo-jp-history-video', surface: 'desktop', isInteractive: true })
+  for (const s of ['oa', 'ob']) await $.tool.call({ tool: 'Bash', command: `bash local/send.sh ${s} --title "${s}"` })
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  await ui.press({ key: 'lam-moi' })
+  const { text } = await $.command.run({ command: 'vp' })
+  const pa = Number(/Onkyo A[^\n]*?(\d+)%/.exec(text)?.[1]), pb = Number(/Onkyo B[^\n]*?(\d+)%/.exec(text)?.[1])
+  expect(pa).toBeGreaterThan(0)
+  expect(pb).toBe(pa)
+  expect(pa).toBeLessThan(39)                          // it read 39 % and climbing
+  await ui.unmount()
+})

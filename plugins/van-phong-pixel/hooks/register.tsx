@@ -27,6 +27,7 @@ let busy = false, again = false, cwdSkill: string | undefined, skills: string[] 
 // one random seed per session: every redraw of the office picks the same props, moods and routines
 const SEED = Math.floor(Math.random() * 2 ** 31)
 const finish = new Map<string, number>()   // slug -> finish time shown (ms)
+const capped = new Map<string, { step: string; pct: number }>()   // slug -> % shown while its step had no real number
 const paneOpen = atom({ plugin: 'van-phong-pixel', key: 'paneOpen' } as const, false)
 // learned stage durations (seconds, median of the last films) per "skill:stage"; seeds the estimates of new films
 let learned: Record<string, number> = {}
@@ -162,8 +163,16 @@ function view(f: Film, now: number): View {
     sv.forEach((s, i) => { s.work = s.state === 'done' ? (tooks[i] != null && !(s.est && tooks[i]! > 3 * s.est && !f.paused) ? tooks[i]! : s.est ?? avg ?? 60) : s.state === 'wait' ? (s.guess ?? 0) : 0 })
     cur.work = Math.max(1, spentCur + Math.max(0, rem - guesses))
     const doneW = sv.reduce((a, s) => a + (s.state === 'done' ? s.work : 0), 0)
-    total = (doneW + spentCur) / Math.max(1, doneW + spentCur + rem)
-    barNow = spentCur / cur.work   // the bar's blocks then add up to exactly the %
+    // no real number for the current step yet (render with no frame or encode, others ≤ 3 %): only up to 10 % of its
+    // estimate counts, so the % does not climb with the clock while Claude's fixed finish time is all there is
+    const noData = f.stage === 'render' ? !enc && !((f.render ?? 0) > 0) : !(progress > 0.03)
+    const counted = noData ? Math.min(spentCur, 0.1 * (cur.est ?? spentCur)) : spentCur
+    total = (doneW + counted) / Math.max(1, doneW + spentCur + rem)
+    // the first real number never makes the % drop below what the capped one showed
+    const held = capped.get(f.slug)
+    if (noData) capped.set(f.slug, { step: cur.id, pct: total })
+    else if (held && held.step === cur.id) total = Math.max(total, held.pct)
+    barNow = Math.min(1, (total * Math.max(1, doneW + spentCur + rem) - doneW) / cur.work)   // the bar's blocks add up to the %
   } else {
     // no honest time left: share of the WORK (each step's usual length)
     for (const s of sv) s.work = s.est ?? avg ?? 60
