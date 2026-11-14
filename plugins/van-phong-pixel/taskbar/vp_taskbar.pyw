@@ -41,7 +41,6 @@ SPR = json.load(open(os.path.join(HERE, 'sprites.json'), encoding='utf-8')); DES
 RW, RH = len(DESK['bg'][0]), len(DESK['bg'])                   # room size (art pixels)
 F, HD, FT = 5, 38, 16                                           # frame width, number panel, footer line
 W, H = RW + 2 * F, F + HD + RH + FT + F
-STEP = {'inputs': 'Nhận input', 'research': 'Tư liệu', 'plan': 'Kế hoạch', 'render': 'Render', 'qa': 'Kiểm tra', 'deliver': 'Giao phim', 'done': 'Xong'}
 OFF = [0, 0]                                                    # drawing origin of the part being drawn
 root = tk.Tk(); root.withdraw()
 Z = max(1, round(root.winfo_fpixels('1i') / 96))               # 1 at 100-149 %, 2 at 150 %+
@@ -73,7 +72,7 @@ def text(x, y, s, font, col, anchor='w'):
 def hhmm(ms):
     if not ms: return '--:--'
     d = datetime.fromtimestamp(ms / 1000)
-    return d.strftime('%H:%M') if d.date() == datetime.now().date() else d.strftime('%d/%m %H:%M')
+    return d.strftime('%H:%M')
 
 jobs, hidden_until, seen = [], 0, 0
 
@@ -108,9 +107,8 @@ def summary(now):
     until = next((j['until'] for j in jobs if j.get('until')), None)
     line = {'err': 'có lỗi', 'wait': 'chờ bạn', 'done': 'xong rồi', 'stale': 'mất tín hiệu',
             'stop': 'dừng → ' + hhmm(until) if until else 'Claude dừng'}.get(st, 'xong ' + hhmm(main.get('finishAt')))
-    doing = STEP.get(main.get('step', ''), main.get('step', '')) + ' · ' + (main.get('title') or main.get('slug', ''))
-    if st == 'done': pct, doing = 100, 'Đã xong · ' + (main.get('title') or main.get('slug', ''))
-    if len(jobs) > 1: doing = f'{len(jobs)} phim · ' + doing
+    doing = (main.get('title') or main.get('slug', '')) + (f'  +{len(jobs) - 1}' if len(jobs) > 1 else '')
+    if st == 'done': pct = 100
     return pct, st, line, doing
 
 def frame(st):
@@ -248,22 +246,41 @@ def room(pct, st, s):
     elif worried: fr = 'worried'
     elif act == 'walk': fr = 'walkA' if int(walked / 6) % 2 else 'walkB'                   # steps follow the distance walked
     elif act == 'visit': fr = {'plant': 'happy', 'phone': 'grab'}.get(spot) or ('wave1' if s % 3 < 0.8 else 'happy')
-    else: fr = 'blink' if s % 4 < 0.15 else ('grab' if s % 5 < 0.4 else 'normal')        # at the desk: blink, reach for papers
-    bob = 2 if act == 'desk' and st == 'run' and s % 2 < 1 else (1 if act == 'walk' and int(walked / 6) % 2 else 0)
+    elif act == 'desk' and st == 'run' and s % 8 > 5: fr = 'red1' if s % 0.24 < 0.12 else 'red2'   # flat out: the pane's typing frames
+    elif act == 'desk' and st == 'run': fr = 'grab' if s % 0.5 < 0.25 else ('blink' if s % 4 < 0.15 else 'normal')   # typing away
+    else: fr = 'blink' if s % 4 < 0.15 else 'normal'
+    rush = act == 'desk' and st == 'run' and s % 8 > 5
+    bob = (1 if s % 0.24 < 0.12 else 0) if rush else 2 if act == 'desk' and st == 'run' and s % 1 < 0.5 else (2 if act == 'walk' and int(walked / 6) % 2 else 0)
     if act == 'cheer': bob = -3 if s % 0.8 < 0.4 else 0                                    # jumps for joy
-    shake = (1 if s % 0.2 < 0.1 else -1) if bad else 0
+    shake = (1 if s % 0.2 < 0.1 else -1) if bad or rush else 0
     front = by + 48 >= DESK_BASE
     if not front: img(bx + shake, by + bob, boss(fr))
     img(0, 0, lit('fg', night, pulse))
     if front: img(bx + shake, by + bob, boss(fr))
     motes(s, night)
+    if act == 'walk' and int(walked / 6) % 2:                                       # little dust puffs at his feet
+        R(bx + 6, by + 46, 2, 1, '#D7C4A8'); R(bx + 24, by + 46, 2, 1, '#D7C4A8')
+    if rush:
+        for i in range(3):                                                         # steam off his head (scene.ts steamHead)
+            k = (s / 0.9 + i / 3) % 1
+            R(bx + 8 + i * 8 + round(2 * math.sin(s * 6 + i)), by - 2 - k * 14, 3, 3, '#FFFFFF' if k < 0.6 else '#D9E2EC')
+        for i in range(4):                                                         # speed lines either side
+            if (s * 10 + i) % 3 < 1.6:
+                y = by + 18 + i * 6; R(bx - 8 - (i % 2) * 3, y, 6, 1, '#FFFFFF'); R(bx + 34 + (i % 2) * 3, y, 6, 1, '#FFFFFF')
+        for i in range(3):                                                         # papers flying off the desk
+            k = (s / 1.1 + i / 3) % 1
+            px = 100 + i * 12 + k * 30; py = 104 - 40 * k + 50 * k * k
+            R(round(px), round(py), 5, 4, '#F5F5F5'); R(round(px), round(py), 5, 1, '#C9D3DD')
+        d = int(s * 6) % 3                                                         # sweat flies
+        R(bx + 30, by + 6 + d * 2, 2, 3, '#81D4FA'); R(bx, by + 8 + d * 2, 2, 3, '#81D4FA')
     # laptop: the same progress on the screen; typing glyphs while he works at it
     R(63, 101, 22, 2, '#0E1E2C')
     if pct: R(63, 101, max(1, round(22 * min(100, pct) / 100)), 2, LED[st])
     if act == 'desk' and st == 'run':
-        for i in range(4):
-            k = (s / 1.2 + i * 0.25) % 1
-            if k < 0.85: R(64 + i * 6, 92 - k * 16, 3, 3, '#B9FFE9')
+        n, sp = (8, 0.5) if rush else (4, 1.0)
+        for i in range(n):
+            k = (s / sp + i / n) % 1
+            if k < 0.85: R(62 + (i * 7) % 26, 92 - k * (22 if rush else 16), 3, 3, '#B9FFE9' if i % 2 else '#FFF59D')
     if spot == 'plant' and act == 'visit':                                         # watering the little plant
         for i in range(3):
             k = (s / 0.9 + i / 3) % 1
