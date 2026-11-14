@@ -16,7 +16,8 @@ The pane's **▣ Bật widget** button puts the boss room above the taskbar: one
 numbers), the boss working and walking around. Drag it anywhere (the spot is remembered); click brings Claude to the
 front; right click: hide 30 minutes, back to the corner, turn off. Press the button again (or "Tắt widget") to close it.
 Needs Python from python.org (`pythonw`); nothing else is installed. Files: `~/.claude/van-phong/widget.json` (on/off),
-`~/.claude/van-phong/live/<session>.json` (what each session shows). Art: `node art-source/taskbar-sprites.mjs`.
+`~/.claude/van-phong/live/<session>.json` (what each session shows). When a session stops writing (Claude closed or asleep), the widget
+reads that film's status from Drive itself with rclone every 30 s and keeps the same numbers going. Art: `node art-source/taskbar-sprites.mjs`.
 
 ## Sources
 

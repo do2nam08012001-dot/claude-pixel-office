@@ -4,8 +4,9 @@
 # bubbles, sweat, zz); sunlight through the window, a desk lamp, drifting clouds, fluttering curtains, dust and a leaf.
 # Drag to move (position is remembered). Click: bring Claude to the front. Right click: menu.
 # Turned on/off by the vp pane's widget button (~/.claude/van-phong/widget.json); each Claude session with vp writes its
-# films to ~/.claude/van-phong/live/<session>.json. `vp_taskbar.pyw demo.json` shows one file instead. Python stdlib only.
-import ctypes, json, math, os, sys, time, tkinter as tk
+# films to ~/.claude/van-phong/live/<session>.json; when a session stops writing (Claude closed), the widget reads
+# that film's status from Drive itself (rclone) and works out the same numbers. `vp_taskbar.pyw demo.json` shows one file instead. Python stdlib only.
+import ctypes, json, math, os, subprocess, sys, threading, time, tkinter as tk
 from datetime import datetime
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -75,23 +76,86 @@ def hhmm(ms):
     return d.strftime('%H:%M')
 
 jobs, hidden_until, seen = [], 0, 0
+drive_st, drive_at, fetching = {}, {}, set()      # slug -> newest Drive status, when it was read; reads in flight
+FRESH = 60_000                                    # a session file older than this: Claude is closed or asleep, go to Drive
 
 def switched_off():
     try: return json.load(open(SWITCH, encoding='utf-8')).get('on') is False
     except Exception: return False      # no switch file yet: stay on
 
+def objects(text):
+    """the JSON objects in a text (rclone cat may join several copies of a status file)"""
+    out, dec, i = [], json.JSONDecoder(), 0
+    while True:
+        i = text.find('{', i)
+        if i < 0: return out
+        try: o, i = dec.raw_decode(text, i); out.append(o)
+        except ValueError: i += 1
+
+def fetch(slug, rclone, path):
+    """read one film's status from Drive (in a thread: rclone takes seconds)"""
+    try:
+        r = subprocess.run([rclone or 'rclone', 'cat', path], capture_output=True, text=True, encoding='utf-8', timeout=60, creationflags=0x08000000)
+        got = [o for o in objects(r.stdout) if o.get('slug') == slug]
+        if r.returncode == 0 and got: drive_st[slug] = max(got, key=lambda o: o.get('updated', 0)); drive_at[slug] = time.time() * 1000
+    except Exception: pass                # offline / no rclone: keep the last numbers
+    finally: fetching.discard(slug)
+
+def project(j, st, now):
+    """the pane's numbers (register.tsx view()) from a Drive status and the step model the plugin last wrote"""
+    j = dict(j); steps = j.get('steps') or []
+    stage = st.get('stage'); enc = st.get('encode'); render = st.get('render')
+    if st.get('done') or stage == 'done': j.update(state='done', pct=100, finishAt=None); return j
+    if stage == 'render' and (render or 0) >= 0.999 and not isinstance(enc, (int, float)): stage = 'qa'
+    ids = [s['id'] for s in steps]
+    j['state'] = 'err' if st.get('blocked') else 'wait' if st.get('approval') else 'stop' if st.get('claudeStop') else 'run'
+    j['until'] = (st.get('claudeStop') or {}).get('until'); j['step'] = stage
+    if stage not in ids: return j
+    i = ids.index(stage); cur = steps[i]; h = (st.get('history') or {}).get(stage) or {}
+    stop = st.get('claudeStop') or {}
+    paused = ((st.get('paused') or {}).get(stage, 0) + (max(0, (now - stop['at']) / 1000) if stop.get('at') else 0))
+    el = max(0, (now - h['start']) / 1000 - paused) if h.get('start') else 0
+    if stage == 'render': p = (0.95 + 0.04 * enc if enc < 1 else 0.99) if isinstance(enc, (int, float)) else (render or 0)
+    else: p = st.get(stage if stage in ('plan', 'research') else 'progress') or 0
+    real = (render or 0) > 0 or isinstance(enc, (int, float)) if stage == 'render' else p > 0.03
+    left = st['eta'] if isinstance(st.get('eta'), (int, float)) else el * (1 - p) / p if p > 0.03 and el else (cur['guess'] - el if cur.get('guess') and el < cur['guess'] else None)
+    frac = min(0.99, max(0, p if real else el / max(1, el + left) if left else 0.9))
+    W = sum(s['work'] for s in steps) or 1
+    j['pct'] = round(100 * min(0.99, (sum(s['work'] for s in steps[:i]) + cur['work'] * frac) / W))
+    own = None if left is None else left + sum(s['guess'] for s in steps[i + 1:])
+    fin = st.get('finishAt')
+    j['finishAt'] = max(fin, now + own * 1000) if fin and fin > now and own is not None else fin if fin and fin > now else now + own * 1000 if own is not None else fin
+    return j
+
+_t = 1_000_000_000_000
+assert project({'steps': [{'id': 'a', 'work': 100, 'guess': 0}, {'id': 'b', 'work': 100, 'guess': 100}]},
+               {'stage': 'b', 'history': {'b': {'start': _t - 50_000}}}, _t)['pct'] == 75
+assert project({'steps': []}, {'stage': 'done'}, _t)['pct'] == 100
+
 def load():
-    """every 2 s: quit when the pane's button turned the widget off, else merge the films of every live session"""
+    """every 2 s: quit when the pane's button turned the widget off, else merge the films of every Claude session;
+    a film whose session stopped writing (Claude closed or asleep) is followed on Drive every 30 s"""
     global jobs, seen
     if not DEMO and switched_off(): os._exit(0)    # quit at once: pending redraws would hit a destroyed canvas
-    got, newest = [], 0
+    now = time.time() * 1000
+    best = {}                                       # slug -> (job, file updated, rclone, drive)
     files = [DEMO] if DEMO else [os.path.join(LIVE, n) for n in (os.listdir(LIVE) if os.path.isdir(LIVE) else []) if n.endswith('.json')]
     for f in files:
         try:
             d = json.load(open(f, encoding='utf-8')); u = d.get('updated', os.path.getmtime(f) * 1000)
-            if not DEMO and time.time() * 1000 - u > 10 * 60_000: continue    # a session closed long ago
-            got += [j for j in d.get('jobs', []) if j.get('state') != 'gone']; newest = max(newest, u)
+            if not DEMO and now - u > 24 * 3600_000: continue        # a session from yesterday
+            for j in d.get('jobs', []):
+                if j.get('state') != 'gone' and (j['slug'] not in best or u > best[j['slug']][1]): best[j['slug']] = (j, u, d.get('rclone'), d.get('drive'))
         except Exception: pass         # half-written: next poll
+    got, newest = [], 0
+    for slug, (j, u, rclone, drive) in best.items():
+        if not DEMO and now - u > FRESH and j.get('skill') and drive:
+            if slug not in fetching and now - drive_at.get(slug, 0) > 30_000:
+                fetching.add(slug)
+                threading.Thread(target=fetch, args=(slug, rclone, f"{drive}/{j['skill']}/status/{slug}.json"), daemon=True).start()
+            if slug in drive_st and drive_at[slug] > u: j = project(j, drive_st[slug], now); u = drive_at[slug]
+        if j.get('state') == 'done' and now - u > 10 * 60_000: continue   # finished a while ago
+        got.append(j); newest = max(newest, u)
     jobs, seen = got, newest
     root.after(2000, load)
 

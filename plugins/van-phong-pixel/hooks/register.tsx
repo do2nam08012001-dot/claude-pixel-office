@@ -221,7 +221,7 @@ async function launchWidget($: any): Promise<boolean> {
   const ps = "$p = @((Get-ChildItem \"$env:LOCALAPPDATA\\Programs\\Python\\Python3*\\pythonw.exe\" -EA 0 | Sort-Object FullName | Select-Object -Last 1).FullName, (Get-Command pyw -EA 0).Source, (Get-Command pythonw -EA 0 | Where-Object { $_.Source -notlike '*WindowsApps*' }).Source) | Where-Object { $_ } | Select-Object -First 1; if (-not $p) { exit 3 }; Start-Process -FilePath $p -ArgumentList ('\"' + $env:VP_PYW + '\"')"
   try { return (await $.process.run(['powershell', '-NoProfile', '-Command', ps], { timeoutMs: 20000, env: { VP_PYW: `${$.plugin.root}/taskbar/vp_taskbar.pyw` } })).exitCode === 0 } catch { return false }
 }
-async function writeLive($: any, dir: string, list: Film[]) {
+async function writeLive($: any, dir: string, list: Film[], drive = DEFAULT_DRIVE) {
   const on = await widgetSaysOn($, dir)
   if ((await read($, widgetOn)) !== on) await update($, widgetOn, () => on)
   if (!on) return
@@ -231,9 +231,13 @@ async function writeLive($: any, dir: string, list: Film[]) {
     const v = view(f, now)
     return { slug: f.slug, title: f.title || f.slug, step: f.stage ?? f.step, pct: v.allDone ? 100 : Math.round(v.total * 100),
       finishAt: !v.allDone && v.remaining != null ? Math.round(now + v.remaining * 1000) : null,
-      state: isDone(f) ? 'done' : f.blocked ? 'err' : f.approval ? 'wait' : isClaudeIdle(f, now) ? 'stop' : 'run', until: f.claudeStop?.until ?? null }
+      state: isDone(f) ? 'done' : f.blocked ? 'err' : f.approval ? 'wait' : isClaudeIdle(f, now) ? 'stop' : 'run', until: f.claudeStop?.until ?? null,
+      // what the widget needs to go on by itself from the Drive status when this session stops writing (Claude closed or asleep)
+      skill: f.source === 'drive' ? f.skill : undefined,
+      steps: v.steps.map(s => ({ id: s.id, work: Math.round(s.work), guess: Math.round(s.state === 'wait' ? (s.guess ?? s.work) : s.state === 'now' ? (s.est ?? s.work) : 0) })) }
   })
-  try { await $.fs.write(`${dir}/live/${(ownKey || 'session').replace(/[^A-Za-z0-9_-]/g, '_')}.json`, JSON.stringify({ updated: now, jobs })) } catch { /* read-only home */ }
+  const rclone = ((await $.store.get('rclone')) as string | undefined) ?? ''
+  try { await $.fs.write(`${dir}/live/${(ownKey || 'session').replace(/[^A-Za-z0-9_-]/g, '_')}.json`, JSON.stringify({ updated: now, drive, rclone, jobs })) } catch { /* read-only home */ }
 }
 async function toggleWidget($: any) {
   const h = await home($)
@@ -347,7 +351,7 @@ async function refreshInner($: any) {
   // active jobs first (newest first), finished ones after
   list.sort((a, b) => Number(isDone(a)) - Number(isDone(b)) || b.updated - a.updated)
   await update($, films, () => list)
-  if (dir && isWin(h)) await writeLive($, dir, list)
+  if (dir && isWin(h)) await writeLive($, dir, list, drive)
   await update($, poll, () => ({ at: Date.now(), error: list.length ? '' : errors.join(' · ') }))
   // keep the step being worked on in view: scroll to it when it changes
   const want = (await read($, focus)) ?? ''
