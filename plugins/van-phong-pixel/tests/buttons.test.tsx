@@ -101,7 +101,7 @@ test('/vp: overdue, waiting for Claude, render done = QA', async ($, on) => {
   await ui.press({ key: 'lam-moi' })
   const { text } = await $.command.run({ command: 'vp' })
   expect(text).toContain('Trễ')
-  expect(text).toMatch(/Trễ[^\n]*quá giờ dự kiến/)
+  expect(text).toMatch(/Trễ[^\n]*còn ~/)   // a past Claude estimate gives way to the steps' own estimate
   expect(text).not.toMatch(/Trễ[^\n]*99%/)
   expect(text).toMatch(/Render xong[^\n]*bước 5\/6 QA/)
   await ui.unmount()
@@ -159,5 +159,23 @@ test('/vp: % counts work, not hours spent', async ($, on) => {
   const { text } = await $.command.run({ command: 'vp' })
   const pct = Number(/Kế hoạch dài[^\n]*?(\d+)%/.exec(text)?.[1])
   expect(pct).toBeLessThan(50)
+  await ui.unmount()
+})
+
+// the Tamiya case: planning ran 11 h 40 (Claude stopped, not recorded), render 0 % just started, Claude's old ETA 70 min
+test('/vp: render at 0 % right after a stalled plan reads sensibly', async ($, on) => {
+  const t = Date.now(), H = (s: number) => t - s * 1000
+  const f = { slug: 'tam', skill: 'jp-explainer-video', title: 'Tamiya', stage: 'render', render: 0, finishAt: t + 70 * 60_000, updated: t,
+    history: { inputs: { start: H(45000), end: H(44917) }, research: { start: H(44917), end: H(43597) }, plan: { start: H(43597), end: H(1200) }, render: { start: H(1200) } } }
+  engine(on, [], JSON.stringify(f))
+  await $.session.start({ cwd: 'D:/x/repo-jp-explainer-video', surface: 'desktop', isInteractive: true })
+  await $.tool.call({ tool: 'Bash', command: 'bash local/send.sh tam --title "tam"' })
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  await ui.press({ key: 'lam-moi' })
+  const { text } = await $.command.run({ command: 'vp' })
+  const pct = Number(/Tamiya[^\n]*?(\d+)%/.exec(text)?.[1])
+  expect(pct).toBeGreaterThan(20)
+  expect(pct).toBeLessThan(45)                       // render (the biggest step) has not moved yet
+  expect(text).toMatch(/Tamiya[^\n]*còn ~\d+ giờ/)   // hours, not the 70 min Claude guessed before the render
   await ui.unmount()
 })

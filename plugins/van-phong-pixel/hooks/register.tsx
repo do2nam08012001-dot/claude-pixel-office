@@ -95,7 +95,7 @@ function view(f: Film, now: number): View {
   let remaining: number | null = 0, known = true, frac = 0
   // how fast this job runs vs the estimates (finished steps): later steps are scaled by it
   let tookSum = 0, estSum = 0
-  steps.forEach((s, i) => { if ((allDone || i < idx) && tooks[i] && s.est) { tookSum += tooks[i]!; estSum += s.est } })
+  steps.forEach((s, i) => { if ((allDone || i < idx) && tooks[i] && s.est && tooks[i]! <= 3 * s.est) { tookSum += tooks[i]!; estSum += s.est } })
   const pace = estSum > 0 ? Math.max(0.5, Math.min(3, tookSum / estSum)) : 1
   let over = false
   const sv: StepView[] = steps.map((s, i) => {
@@ -120,41 +120,32 @@ function view(f: Film, now: number): View {
     return { ...s, state: 'wait', guess, w: guess ?? 60, work: 0 }
   })
   if (allDone) remaining = 0
-  // TIME is the unit of every bar: a finished step is as wide as it took, the current one as wide as
-  // (time spent + time it still needs), later ones as their (pace-scaled / learned) estimate.
-  // So the total bar, its %, the step bar and the HP bar over the worker all say the same thing.
+  // Time line, kept consistent: the current step uses real progress when the job reports it (render %, notes,
+  // upload %), each later step shows its own estimate, and the total time left is never below the sum of the steps
+  // (Claude's estimate wins when it is longer).
   const cur = sv.find(s => s.state === 'now')
-  const futW = () => sv.reduce((a, s) => a + (s.state === 'wait' ? s.w : 0), 0)
   const spentCur = cur?.elapsed ?? 0
-  // what the current step still needs on its own estimate (never zero: a step that ran over still needs a bit)
-  const curNeed = cur ? (cur.left != null && cur.left > 0 ? cur.left : Math.max(60, spentCur * 0.1)) : 0
-  let curLeft = curNeed
+  const real = f.stage === 'render' ? f.render != null : progress > 0.03
+  const curLeft: number | null = cur ? (cur.left != null && cur.left > 0 ? cur.left : null) : 0
+  if (cur) {
+    frac = real ? progress : curLeft != null ? spentCur / Math.max(1, spentCur + curLeft) : 0.9
+    frac = Math.min(0.99, Math.max(0, frac))
+    cur.w = Math.max(1, spentCur + (curLeft ?? 0))
+  }
+  const own = curLeft == null ? null : curLeft + sv.reduce((a2, s) => a2 + (s.state === 'wait' ? (s.guess ?? 0) : 0), 0)
   const fin = finish.get(f.slug)
   let overdue = 0
-  if (fin && !allDone && fin < now) overdue = (now - fin) / 1000
-  if (fin && !allDone && !overdue) {
-    // Claude's own estimate of the whole film: split what is left between this step and the later ones
-    remaining = Math.max(60, (fin - now) / 1000); known = true; over = false
-    const fut = futW(), share = curNeed + fut > 0 ? curNeed / (curNeed + fut) : 1
-    curLeft = remaining * share
-    const k = fut > 0 ? (remaining - curLeft) / fut : 1
-    for (const s of sv) if (s.state === 'wait') { s.w = s.w * k; s.guess = s.w }
-  }
-  if (cur) {
-    cur.w = Math.max(1, spentCur + curLeft); cur.left = curLeft
-    const useP = progress > 0.03 && (!fin || overdue > 0)
-    frac = useP ? progress : Math.min(0.99, spentCur / cur.w)
-    if (useP) cur.w = Math.max(cur.w, spentCur / Math.max(0.01, progress))
-  }
-  const W = sv.reduce((a, s) => a + s.w, 0) || 1
-  const doneW = sv.reduce((a, s) => a + (s.state === 'done' ? s.w : 0), 0)
+  if (!allDone && fin) {
+    if (fin > now) { remaining = Math.max((fin - now) / 1000, own ?? 0); known = true; over = false }
+    else if (own != null) { remaining = own; known = true }
+    else overdue = (now - fin) / 1000
+  } else if (!allDone && own != null && known) remaining = own
   // % = share of the WORK (each step's usual length), not of the time spent: a step that ran long or a new ETA does not move it
   for (const s of sv) s.work = s.est ?? avg ?? 60
   const WW = sv.reduce((a, s) => a + s.work, 0) || 1
   const total = (sv.reduce((a, s) => a + (s.state === 'done' ? s.work : 0), 0) + (cur ? cur.work * frac : 0)) / WW
-  if (!fin && !over) remaining = known ? Math.max(0, W - doneW - (cur ? cur.w * frac : 0)) : remaining
   // the HP bar starts at the same share and fills exactly when the step should end
-  scene = { ...scene, progress: frac, rate: curLeft > 0 ? (1 - frac) / curLeft : 0 }
+  scene = { ...scene, progress: frac, rate: curLeft && curLeft > 0 ? (1 - frac) / curLeft : 0 }
   return { over, overdue, steps: sv, idx, allDone, progress, frac, scene, total: allDone ? 1 : Math.min(0.99, total), remaining: overdue ? null : known ? remaining : null, known }
 }
 
@@ -465,7 +456,7 @@ async function drawOffice($: any, e: any) {
     const etaText = v.allDone ? 'đã xong' : kind === 'stale' ? 'im lặng — không ước lượng' : v.overdue ? `quá giờ dự kiến ${dur(v.overdue)} — chờ cloud báo lại` : waitEta ? 'đang chờ Claude ước giờ xong…' : v.over ? 'bước này quá dự kiến — chờ cloud báo %' : v.remaining == null ? 'chưa đủ dữ liệu để ước lượng' : `còn ~${dur(v.remaining)} · xong ~${clock(now + v.remaining * 1000)}`
     const steps: CardStep[] = v.steps.map(s => ({
       label: s.label, role: s.role, state: s.state, w: s.work,
-      took: s.took ? dur(s.took) : undefined, elapsed: s.elapsed ? dur(s.elapsed) : undefined,
+      took: s.took ? dur(s.took) + (s.est && s.took > 3 * s.est && !f.paused ? ' (gồm lúc dừng)' : '') : undefined, elapsed: s.elapsed ? dur(s.elapsed) : undefined,
       left: s.state === 'now' && !v.progress && s.est && (s.elapsed ?? 0) > s.est ? `quá dự kiến ${dur((s.elapsed ?? 0) - s.est)}` : s.left != null ? `~${dur(s.left)}` : undefined, guess: s.guess != null ? dur(s.guess) : undefined,
     }))
     const stale = kind !== 'stale' ? '' : now - f.updated > STALE_MS ? `Không cập nhật ${dur((now - f.updated) / 1000)}: có thể đã dừng.` : f.claudeStop ? `Claude dừng: ${stopWhy(f)}; việc nền vẫn chạy.` : `Claude không làm gì ${dur((now - (f.claudeAt ?? now)) / 1000)} (có thể hết hạn mức hoặc đang chờ); việc nền vẫn chạy.`
