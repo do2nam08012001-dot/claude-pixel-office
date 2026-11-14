@@ -302,7 +302,7 @@ export function officeSvg(A, s = {}) {
   front += screen(56, 197, 14, 8, rOn, err ? 'err' : 'ok');
   if (rOn && !err) top += glyphs(58, 196);
   if (rOn && err) { top += bubble('err', 70, 160); under += zoneAlarm(0, 168, 84, 88); }
-  back += tag(3, 247, cut(L.build, 13) + (rOn ? ` ${Math.round(rp * 100)}%` : ''), rOn, '#37474F');
+  back += tag(3, 247, cut(L.build, 13) + (rOn && !st0.noPct ? ` ${Math.round(rp * 100)}%` : ''), rOn, '#37474F');
   // ---------- check ----------
   const qOn = at('qa');
   if (qOn) { mid += late('check', walker('qa', 'qa', [[0, 126, 188], [8, 126, 188], [34, 102, 188], [64, 102, 188], [90, 126, 188], [100, 126, 188]], 6, { carry: img(S.clip, -3, 11, 6, 8), mood: err ? 'worried' : 'red', rush: true, hp: P, bad: err }), actor('qa', 126, 188, 'happy', true)); under += workGlow(88, 168, 80, 88); if (!err) top += [0, 1, 2, 3, 4].map(i => rect(98, 177 + i * 3, 2, 2, '#43A047', `chk c${i}`, 0)).join(''); }

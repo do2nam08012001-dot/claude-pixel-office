@@ -179,3 +179,23 @@ test('/vp: render at 0 % right after a stalled plan reads sensibly', async ($, o
   expect(text).toMatch(/Tamiya[^\n]*còn ~\d+ giờ/)   // hours, not the 70 min Claude guessed before the render
   await ui.unmount()
 })
+
+// Tamiya 2: the cloud's render watcher died (render stays 0 for 66 min): no "Render 0%", time from the step estimate;
+// once the 1080p output is being written, the frames count as done and the encode shows as a sub-step
+test('/vp: render with no numbers says so; the final encode shows under Render', async ($, on) => {
+  const t = Date.now(), H = (s: number) => t - s * 1000
+  const hist = { inputs: { start: H(48000), end: H(47917) }, research: { start: H(47917), end: H(46597) }, plan: { start: H(46597), end: H(3960) }, render: { start: H(3960) } }
+  const a = { slug: 'tam0', skill: 'jp-explainer-video', title: 'Tamiya A', stage: 'render', render: 0, message: '', activity: 'frame_0412.png', updated: t, history: hist }
+  const b = { ...a, slug: 'tam1', title: 'Tamiya B', activity: 'video_1080p.tmp.mp4' }
+  engine(on, [], JSON.stringify(a) + JSON.stringify(b))
+  await $.session.start({ cwd: 'D:/x/repo-jp-explainer-video', surface: 'desktop', isInteractive: true })
+  for (const s of ['tam0', 'tam1']) await $.tool.call({ tool: 'Bash', command: `bash local/send.sh ${s} --title "${s}"` })
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  await ui.press({ key: 'lam-moi' })
+  const { text } = await $.command.run({ command: 'vp' })
+  expect(text).toMatch(/Tamiya A[^\n]*chưa có số liệu render/)
+  expect(text).not.toMatch(/Tamiya A[^\n]*Render 0%/)
+  expect(text).toMatch(/Tamiya A[^\n]*còn ~\d+ giờ/)
+  expect(text).toMatch(/Tamiya B[^\n]*bước 4\/6 Render › nén video cuối[^\n]*Nén video cuối/)
+  await ui.unmount()
+})

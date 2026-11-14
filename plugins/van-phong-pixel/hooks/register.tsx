@@ -57,10 +57,16 @@ const dur = (s: number) => (s < 90 ? `${Math.max(1, Math.round(s))} giây` : s <
 const clock = (ms: number) => { const d = new Date(ms); return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}` }
 
 type StepView = Step & { state: 'done' | 'now' | 'wait'; took?: number; elapsed?: number; left?: number | null; guess?: number | null; w: number; work: number }
-type View = { over: boolean; overdue: number; steps: StepView[]; idx: number; allDone: boolean; progress: number; frac: number; scene: any; total: number; remaining: number | null; known: boolean }
+type View = { over: boolean; overdue: number; steps: StepView[]; idx: number; allDone: boolean; progress: number; frac: number; scene: any; total: number; remaining: number | null; known: boolean; rnote: string }
 
 function view(f: Film, now: number): View {
   let steps: Step[], idx: number, allDone: boolean, progress: number, scene: any
+  // the final encode (frames are done) shows as a sub-step of Render: the cloud's last file is the 1080p output
+  const enc = f.stage === 'render' && /video_1080p(\.tmp)?\.mp4/.test(f.activity ?? '') ? (/\.tmp\.mp4/.test(f.activity!) ? 'run' : 'done') : ''
+  // render 0 % / no number for over 2 min = the cloud's render watcher is not reporting: say so, time it by the estimate
+  const noRender = f.stage === 'render' && !enc && !((f.render ?? 0) > 0) && (f.render == null || now - (f.history?.render?.start ?? f.updated) > 120_000)
+  const rDone = f.stage === 'render' && (f.render ?? 0) >= 0.999 && !enc
+  const rnote = f.stage !== 'render' ? '' : enc === 'run' ? 'Nén video cuối (khung hình xong 100%)' : enc ? 'Đã nén video cuối, chờ cloud chốt bước Render' : noRender ? 'Render: chưa có số liệu render' : `Render ${Math.round((f.render ?? 0) * 100)}%`
   if (Array.isArray(f.workflow) && f.workflow.length) {
     steps = f.workflow.map((s, i) => ({ id: String(s.id ?? i), label: String(s.label ?? s.id ?? `Bước ${i + 1}`), role: (ROLES.includes(s.role) ? s.role : ROLES[Math.min(i, 5)]) as Role, est: typeof s.est === 'number' ? s.est : undefined }))
     allDone = !!f.done || f.step === 'done'
@@ -72,17 +78,19 @@ function view(f: Film, now: number): View {
     const active = idx >= 0 && idx < steps.length ? steps[idx].role : null
     scene = { active, progress, doneRoles: steps.slice(0, Math.max(0, idx)).map(s => s.role).filter(r => r !== active), allDone, blocked: f.blocked, approval: f.approval, labels }
   } else {
-    steps = VIDEO_STEPS.map(s => ({ ...s, est: learned[`${f.skill}:${s.id}`] ?? s.est }))
+    steps = VIDEO_STEPS.map(s => ({ ...s, est: learned[`${f.skill}:${s.id}`] ?? s.est, label: s.id === 'render' && enc ? `Render › ${enc === 'run' ? 'nén video cuối' : 'đã nén xong'}` : s.label }))
     const map: Record<string, number> = { idle: -1, inputs: 0, research: 1, plan: 2, render: 3, qa: 4, deliver: 5, done: 6 }
     idx = map[f.stage ?? 'idle'] ?? -1; allDone = f.stage === 'done'
-    if (f.stage === 'render' && (f.render ?? 0) >= 0.999) idx = map.qa
+    if (rDone) idx = map.qa
     // share of the current stage: render %, the cloud's notes (research / plan), upload % (inputs)
-    const pk = f.stage === 'render' ? f.render : f.stage === 'plan' ? f.plan : f.stage === 'research' ? f.research : f.progress
+    const pk = f.stage === 'render' ? (enc ? (enc === 'run' ? 0.95 : 0.99) : noRender ? 0 : f.render) : f.stage === 'plan' ? f.plan : f.stage === 'research' ? f.research : f.progress
     progress = Math.max(0, Math.min(1, pk ?? 0))
-    scene = legacy(f.stage === 'render' && (f.render ?? 0) >= 0.999 ? { ...f, stage: 'qa' } : f)
+    scene = legacy(rDone ? { ...f, stage: 'qa' } : f)
+    if (noRender) scene.noPct = true
+    if (enc) scene.labels = { ...scene.labels, build: 'Nén video' }
   }
   let h = f.history ?? {}
-  if (f.stage === 'render' && (f.render ?? 0) >= 0.999 && h.render?.start) { const e = h.render.end ?? f.updated; h = { ...h, render: { start: h.render.start, end: e }, qa: h.qa ?? { start: e } } }
+  if (rDone && h.render?.start) { const e = h.render.end ?? f.updated; h = { ...h, render: { start: h.render.start, end: e }, qa: h.qa ?? { start: e } } }
   // a step that started in the last 40 s: the previous step's employee carries the work to the next room
   const cur0 = idx > 0 && idx < steps.length ? steps[idx] : null
   const n = seen.get(f.slug)
@@ -125,7 +133,7 @@ function view(f: Film, now: number): View {
   // (Claude's estimate wins when it is longer).
   const cur = sv.find(s => s.state === 'now')
   const spentCur = cur?.elapsed ?? 0
-  const real = f.stage === 'render' ? f.render != null : progress > 0.03
+  const real = f.stage === 'render' ? !!enc || (f.render != null && !noRender) : progress > 0.03
   const curLeft: number | null = cur ? (cur.left != null && cur.left > 0 ? cur.left : null) : 0
   if (cur) {
     frac = real ? progress : curLeft != null ? spentCur / Math.max(1, spentCur + curLeft) : 0.9
@@ -146,7 +154,7 @@ function view(f: Film, now: number): View {
   const total = (sv.reduce((a, s) => a + (s.state === 'done' ? s.work : 0), 0) + (cur ? cur.work * frac : 0)) / WW
   // the HP bar starts at the same share and fills exactly when the step should end
   scene = { ...scene, progress: frac, rate: curLeft && curLeft > 0 ? (1 - frac) / curLeft : 0 }
-  return { over, overdue, steps: sv, idx, allDone, progress, frac, scene, total: allDone ? 1 : Math.min(0.99, total), remaining: overdue ? null : known ? remaining : null, known }
+  return { over, overdue, steps: sv, idx, allDone, progress, frac, scene, total: allDone ? 1 : Math.min(0.99, total), remaining: overdue ? null : known ? remaining : null, known, rnote }
 }
 
 // Pull complete JSON objects out of concatenated text (rclone cat joins files; files may be pretty-printed).
@@ -189,7 +197,7 @@ function summary(list: Film[], now: number) {
     const v = view(f, now), cur = v.idx >= 0 && v.idx < v.steps.length ? v.steps[v.idx] : null
     const state = f.blocked ? 'LỖI' : f.approval ? 'CHỜ DUYỆT' : v.allDone ? 'XONG' : isClaudeIdle(f, now) ? `CLAUDE ĐANG DỪNG (${stopWhy(f) || 'hết hạn mức?'})` : 'đang làm'
     const eta = v.allDone ? '' : v.overdue ? ` · quá giờ dự kiến ${dur(v.overdue)}` : v.remaining != null ? ` · còn ~${dur(v.remaining)}` : ''
-    return `• ${f.title || f.slug} — ${state} · ${Math.round(v.total * 100)}%${cur ? ` · bước ${v.idx + 1}/${v.steps.length} ${cur.label}` : ''}${eta}${f.message ? ` · ${f.message}` : ''}`
+    return `• ${f.title || f.slug} — ${state} · ${Math.round(v.total * 100)}%${cur ? ` · bước ${v.idx + 1}/${v.steps.length} ${cur.label}` : ''}${eta}${f.message ? ` · ${f.message}` : v.rnote && !v.allDone ? ` · ${v.rnote}` : ''}`
   }).join('\n')
 }
 // Claude itself idle (usage limit, waiting) while background work still beats; a render runs on its own, so it does not count there
@@ -464,7 +472,7 @@ async function drawOffice($: any, e: any) {
     const td = (f as any).todo as { done: number; total: number; current: string } | undefined
     // what the cloud is doing: its todo item, else its note, else the render % or the last file it touched
     const live = kind === 'run' && !v.allDone ? (td?.current ? `${td.current} (${td.done}/${td.total})` : f.message
-      || (f.stage === 'render' ? `Render ${Math.round((f.render ?? 0) * 100)}%` : f.activity ? `vừa sửa ${f.activity}` : '')) : ''
+      || (f.stage === 'render' ? v.rnote : f.activity ? `vừa sửa ${f.activity}` : '')) : ''
     const message = f.blocked || f.approval ? (f.message || (f.blocked ? 'Công việc báo bị vướng.' : 'Công việc chờ bạn trả lời.')) : stale || (live ? `Đang làm: ${live}` : '')
     const reply = f.blocked || f.approval ? (f.source === 'drive' ? 'Trả lời ngay trong phiên gốc này — Claude chuyển sang phiên cloud.' : 'Trả lời trong phiên đang chạy việc này.') : stale && claudeIdle(f) ? 'Khi hạn mức mở lại: nhắn phiên cloud "làm tiếp".' : stale ? 'Hỏi Claude ở phiên gốc kiểm tra phiên cloud.' : live && f.activity ? `Claude vừa: ${f.activity}` : ''
     const svg = cardSvg({ title: f.title || f.slug, group, status: { t: KIND_T[kind], kind }, total: v.total, etaText, steps, progress: v.frac, message, reply, updatedText: `${dur((now - f.updated) / 1000)} trước`, focused }, W)
