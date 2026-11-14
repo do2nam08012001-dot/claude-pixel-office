@@ -41,6 +41,7 @@ const seen = new Map<string, { step: string; from?: string; to?: string; at: num
 let ticks = 0, driveCache: Film[] = [], driveError = ''
 // last known flags per job, to raise a toast when a job gets blocked, waits for approval or finishes
 const flags = new Map<string, string>()
+const errSeen = new Set<string>()   // films that were blocked at some point (the header keeps them in its "lỗi" count)
 // last scene: reuse the same SVG while nothing visible changed, so the pane does not reload (flash)
 let sceneKey = '', sceneSvg = ''
 // double buffer: the old scene stays on top (overlay) while the new one loads underneath, then the overlay goes
@@ -351,6 +352,7 @@ async function refreshInner($: any) {
   // tell the chairman at once when something needs them or a job is done
   for (const f of list) {
     const now = isDone(f) ? 'done' : f.blocked ? 'err' : f.approval ? 'wait' : 'run', before = flags.get(f.slug)
+    if (now === 'err' && before !== 'err') errSeen.add(f.slug)
     if (before !== undefined && before !== now && now !== 'run') {
       const msg = now === 'err' ? `Lỗi · ${f.title || f.slug}: ${f.message || 'bị vướng'} — trả lời ngay trong phiên này`
         : now === 'wait' ? `Chờ duyệt · ${f.title || f.slug}: ${f.message || 'cần bạn trả lời'} — trả lời ngay trong phiên này`
@@ -423,20 +425,36 @@ function describe(e: any): string {
   if (tool === 'Agent' || tool === 'Task') return `Giao việc: ${String(e.description ?? '').slice(0, 50)}`
   return tool.replace(/^mcp__[^_]+__/, '')
 }
-let etaAsks = 0, lastEnsure = 0
+let etaAsks = 0, lastEnsure = 0, blockedAt = 0, stopAt = 0
+const MAX_ASKS = 5, RECOVER_MS = 10 * 60_000   // a stop shorter than 10 min does not make Claude's finish time stale
 let limits: { kind: string; percentUsed: number; resetsAt?: string }[] = []
 const STAGE_MARK = /drive\.sh["']?\s+mark\s+(start|inputs|research_done|plan_done|render_start|render_done)\b([^\n;&|]*)/
-function askEta($: any, command: string) {
-  if (/drive\.sh["']?\s+mark\s+eta\s+\d/.test(command) || /drive\.sh["']?\s+mark\s+note\s+.*\s\d+(\.\d+)?\s*$/m.test(command)) return
-  const m = STAGE_MARK.exec(command)
-  if (!m) return
-  if (/\s\d+(\.\d+)?\s*["']?\s*$/.test(m[2])) return
-  if (etaAsks >= 3) return
+const etaGiven = (c: string) => /drive\.sh["']?\s+mark\s+eta\s+\d/.test(c) || /drive\.sh["']?\s+mark\s+note\s+.*\s\d+(\.\d+)?\s*$/m.test(c)
+function ask($: any, why: string) {
+  if (etaAsks >= MAX_ASKS) return
   etaAsks++
-  void $.prompt.submit({ text: `(Văn phòng hỏi ${etaAsks}/3) Người dùng cần giờ xong chính xác: ước còn bao nhiêu phút nữa thì xong CẢ phim, tính từ bây giờ? Trả lời bằng một lệnh: bash cloud/drive.sh mark eta <phút>, rồi làm tiếp việc đang dở. Từ giờ ghi kèm số phút ở cuối mỗi lệnh mark <bước> "" <phút>.` }).catch(() => {})
+  void $.prompt.submit({ text: `(Văn phòng hỏi ${etaAsks}/${MAX_ASKS}) ${why}Người dùng cần giờ xong chính xác: ước còn bao nhiêu phút nữa thì xong CẢ phim, tính từ bây giờ? Trả lời bằng một lệnh: bash cloud/drive.sh mark eta <phút>, rồi làm tiếp việc đang dở. Từ giờ ghi kèm số phút ở cuối mỗi lệnh mark <bước> "" <phút>, và sau khi sửa xong lỗi thì mark resume rồi mark eta <phút>.` }).catch(() => {})
+}
+// back from an error or a stop that lasted over 10 min: Claude's old finish time no longer holds, ask once for a new one
+const clockNow = async ($: any): Promise<number> => { try { return Number(await $.clock.now()) || Date.now() } catch { return Date.now() } }
+function recovered($: any, since: number, now: number, what: string, command: string) {
+  if (since && now - since > RECOVER_MS && !etaGiven(command)) ask($, `Vừa hết ${what} sau ${dur((now - since) / 1000)}, giờ xong cũ không còn đúng. `)
+}
+async function askEta($: any, command: string) {
+  const now = await clockNow($)
+  if (/drive\.sh["']?\s+mark\s+blocked\b/.test(command)) { blockedAt ||= now; return }
+  const m = STAGE_MARK.exec(command)
+  if (blockedAt && (m || /drive\.sh["']?\s+mark\s+resume\b/.test(command))) { const t = blockedAt; blockedAt = 0; if (now - t > RECOVER_MS) return recovered($, t, now, 'lỗi', command) }
+  if (etaGiven(command) || !m) return
+  if (/\s\d+(\.\d+)?\s*["']?\s*$/.test(m[2])) return
+  ask($, '')
+}
+async function asks($: any, e: any) {
+  if (stopAt) { const t = stopAt; stopAt = 0; recovered($, t, await clockNow($), 'lúc Claude dừng', String(e.command ?? '')) }
+  if (String(e.tool ?? '') === 'Bash') await askEta($, String(e.command ?? ''))
 }
 function report($: any, e: any) {
-  if (String(e.tool ?? '') === 'Bash') askEta($, String(e.command ?? ''))
+  void asks($, e).catch(() => {})
   liveAct = describe(e)
   const list = Array.isArray(e.todos) ? e.todos : Array.isArray(e.items) ? e.items : null
   if (list) liveTodos = JSON.stringify(list.map((x: any) => ({ content: x.content, activeForm: x.activeForm, status: x.status })))
@@ -500,7 +518,8 @@ async function drawOffice($: any, e: any) {
   const px = Math.round(Math.max(220, Math.min(720, cols * 8.6)))
   const active = list.filter(f => !isDone(f)), finished = list.filter(isDone)
   const shown = list.find(f => f.slug === want) ?? active[0] ?? list[0]
-  const errs = list.filter(f => f.blocked).length, waits = list.filter(f => f.approval && !f.blocked).length
+  // the header keeps counting a film that hit an error after it was fixed (this session)
+  const errs = list.filter(f => f.blocked || errSeen.has(f.slug)).length, waits = list.filter(f => f.approval && !f.blocked).length
   const sceneState = { ...(shown ? view(shown, now).scene : { active: null, doneRoles: [] }), now, seed: SEED, hour: new Date(now).getHours() }
   // progress is animated inside the SVG (HP bars run at the real rate), so only visible state changes redraw it
   // the HP bar is redrawn every 5 % (it animates smoothly in between), other visible changes redraw at once
@@ -696,6 +715,7 @@ export const register: Register = on => {
   on('classic.StopFailure', ($, e, next) => {
     if (cloudRoot) {
       const reason = String((e as any).error ?? 'unknown')
+      void clockNow($).then(t => { stopAt ||= t })
       const full = limits.filter(l => l.percentUsed >= 100 && l.resetsAt).map(l => l.resetsAt as string).sort().pop() ?? ''
       void $.process.run(['bash', `${cloudRoot}/cloud/drive.sh`, 'stop', reason, reason === 'rate_limit' ? full : ''], { timeoutMs: 40000 }).catch(() => {})
     }

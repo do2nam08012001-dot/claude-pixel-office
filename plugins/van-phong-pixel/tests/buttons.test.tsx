@@ -264,3 +264,24 @@ test('/vp: Onkyo - % agrees with the time left, hours never read 60 minutes', as
   expect(text).not.toMatch(/60 phút/)
   await ui.unmount()
 })
+
+// cloud: after an error that lasted over 10 min is fixed, the office asks Claude once for a new finish time (5 asks at most)
+test('cloud: back from a long error, Claude is asked for a new finish time', async ($, on) => {
+  const prompts: string[] = []
+  let at = 1_800_000_000_000
+  engine(on, [])
+  on('clock.now', () => ({ value: at }))
+  on('prompt.submit', (_: any, e: any) => { prompts.push(e.text); return { text: e.text } })
+  const bash = async (command: string) => { await $.tool.call({ tool: 'Bash', command }); await new Promise(r => setTimeout(r, 60)) }
+  await $.session.start({ cwd: '/home/user/repo-jp-history-video', surface: 'desktop', isInteractive: true })
+  await bash('bash cloud/drive.sh mark blocked "render lỗi"')
+  at += 3 * 60_000
+  await bash('bash cloud/drive.sh mark resume')
+  expect(prompts.length).toBe(0)                       // a short error: no question
+  await bash('bash cloud/drive.sh mark blocked "lại lỗi"')
+  at += 17 * 60_000
+  await bash('bash cloud/drive.sh mark resume')
+  expect(prompts[0]).toMatch(/Văn phòng hỏi 1\/5\) Vừa hết lỗi sau 17 phút/)
+  await bash('bash cloud/drive.sh mark resume')
+  expect(prompts.length).toBe(1)                       // once per recovery
+})
