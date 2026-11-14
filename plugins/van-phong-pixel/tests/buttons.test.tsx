@@ -1,4 +1,5 @@
 import { expect, test } from 'claude-code/testing'
+import { wheelOffset } from '../hooks/register'
 
 const PANE = {
   plugin: 'van-phong-pixel', component: 'Pane', requestId: 'van-phong',
@@ -234,4 +235,12 @@ test('Windows: the widget button turns the taskbar widget on (writes the switch,
   await ui.press({ key: 'widget' })
   expect(JSON.parse(files.get(sw)!).on).toBe(false)
   await ui.unmount()
+})
+
+// after a press the wheel went through the engine's row scroll and pulled the pane to the top: a tick keeps its direction
+test('pane: a wheel tick never scrolls against its direction', () => {
+  expect(wheelOffset(3, 0, 40)).toBe(43)     // down, engine said top: keep going down
+  expect(wheelOffset(-3, 50, 40)).toBe(37)   // up, engine said further down
+  expect(wheelOffset(3, 43, 40)).toBe(43)    // normal tick untouched
+  expect(wheelOffset(-3, 0, 2)).toBe(0)
 })

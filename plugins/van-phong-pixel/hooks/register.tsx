@@ -459,6 +459,15 @@ async function learn($: any, list: Film[]) {
   learned = Object.fromEntries(Object.entries(db.d).filter(([, v]) => v.length).map(([k, v]) => [k, med(v)]))
 }
 
+// shortcut: the last 60 scroll/focus moves of the pane go to ~/.claude/van-phong/scroll.log to diagnose the jump to the top; drop once fixed
+let paneOffset = 0, scrollLines: string[] = []
+/** where a person's wheel tick lands: never against its own direction from the offset the pane shows now */
+export const wheelOffset = (by: number, offset: number, cur: number) => (by > 0 && offset < cur) || (by < 0 && offset > cur) ? Math.max(0, cur + by) : offset
+async function scrollLog($: any, line: string) {
+  scrollLines = [...scrollLines, `${new Date().toISOString().slice(11, 19)} ${line}`].slice(-60)
+  try { const h = await home($); if (h) await $.fs.write(`${h}/.claude/van-phong/scroll.log`, scrollLines.join('\n') + '\n') } catch { /* no folder */ }
+}
+
 // the office drawing: shared by the side pane and the transcript row (cloud sessions place no panes)
 async function drawOffice($: any, e: any) {
   const els: any = $.ui.resolve(e)
@@ -623,7 +632,23 @@ export const register: Register = on => {
     return drawOffice($, e)
   })
 
-  on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => drawOffice($, e))
+  on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
+    const o = (e.props as any)?.scroll?.offset
+    if (typeof o === 'number') paneOffset = o
+    return drawOffice($, e)
+  })
+
+  // after a press the pane holds the keys and the wheel goes through the engine's row scroll, which pulled the pane
+  // back to the top on every tick: a wheel tick never moves against its own direction
+  on('ui.scroll', { requestId: PANE }, async ($, e, next) => {
+    const s: any = e
+    const want = s.origin?.kind === 'person' ? wheelOffset(s.by, s.offset, paneOffset) : s.offset
+    void scrollLog($, `scroll by=${s.by} offset=${s.offset} cur=${paneOffset} rows=${s.bodyRows}/${s.contentRows}${want !== s.offset ? ' FIXED' : ''}`)
+    const r = await next({ ...s, offset: want })
+    if (!(r as any)?.deny) paneOffset = want
+    return r
+  })
+  on('ui.focus', { requestId: PANE }, async ($, e, next) => { void scrollLog($, `focus ${(e as any).element ?? '-'} by ${(e as any).origin?.kind}`); return next(e) })
 
   on('ui.close', async ($, e, next) => {
     if ((e as any).id === PANE) await update($, paneOpen, () => false)
