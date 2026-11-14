@@ -62,6 +62,9 @@ for (const [who, frames] of Object.entries(A.chars)) {
     paintBox(g, A.bg, DW, DH, X, Y); return g;
   };
   const bg = comp(X, Y, DW, DH), fg = blank(DW, DH); paintBox(fg, A.fg, DW, DH, X, Y);
+  // a shorter desk (x 36..119 instead of ..143): the boss walks round its right end without passing through it.
+  // Columns 96..119 of the desk (plain drawer front) go; everything right of them moves 24 px left.
+  for (const r of fg) { r.splice(96, 24); r.push(...Array(24).fill(null)) }
   const bub = {}; for (const k of ['ok', 'wait', 'err']) { const g = blank(32, 32); paintBox(g, A.props['b_' + k], 32, 32); bub[k] = enc(g); }
   // top: the room's coordinates in the widget code start at office y 70 (the old crop), so the wall sits at negative y
   out.desk = { bg: enc(bg), fg: enc(fg), bub, pal, boss: [422 - X, 140 - Y] };   // boss seat = scene.ts HOME.boss (211,70) x2

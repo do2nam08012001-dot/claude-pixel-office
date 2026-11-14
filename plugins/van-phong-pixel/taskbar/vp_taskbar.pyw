@@ -6,14 +6,15 @@
 # Turned on/off by the vp pane's widget button (~/.claude/van-phong/widget.json); each Claude session with vp writes its
 # films to ~/.claude/van-phong/live/<session>.json; when a session stops writing (Claude closed), the widget reads
 # that film's status from Drive itself (rclone) and works out the same numbers. `vp_taskbar.pyw demo.json` shows one file instead. Python stdlib only.
-import ctypes, json, math, os, subprocess, sys, threading, time, tkinter as tk
+import ctypes, json, math, os, re, subprocess, sys, threading, time, tkinter as tk
 from datetime import datetime
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 HOME = os.path.join(os.path.expanduser('~'), '.claude', 'van-phong')
 # one widget per Claude session: `--session <key>` shows only that session's films (live/<key>.json)
 SESS = sys.argv[2] if len(sys.argv) > 2 and sys.argv[1] == '--session' else ''
-DEMO = sys.argv[1] if len(sys.argv) > 1 and not SESS else ''
+SELFTEST = sys.argv[1:2] == ['--selftest']    # `vp_taskbar.pyw --selftest`: the pane's case table, exit 1 on a mismatch
+DEMO = sys.argv[1] if len(sys.argv) > 1 and not SESS and not SELFTEST else ''
 SUF = '-' + SESS if SESS else ''
 LIVE, SWITCH = os.path.join(HOME, 'live'), os.path.join(HOME, f'widget{SUF}.json')
 POSF = os.path.join(HOME, f'taskbar{SUF}.json')
@@ -34,12 +35,20 @@ EMO = {
 # one instance only (the plugin may launch it more than once)
 k32 = ctypes.windll.kernel32
 _mutex = k32.CreateMutexW(None, False, 'van-phong-pixel-taskbar' + SUF)
-if k32.GetLastError() == 183: sys.exit(0)
-try: ctypes.windll.shcore.SetProcessDpiAwareness(1)   # crisp pixels on scaled screens
+if k32.GetLastError() == 183 and not SELFTEST: sys.exit(0)
+try: ctypes.windll.shcore.SetProcessDpiAwareness(2)   # per-monitor: crisp on every screen, not only the main one
 except Exception: pass
 
-def work_area():
-    r = (ctypes.c_long * 4)(); ctypes.windll.user32.SystemParametersInfoW(0x30, 0, r, 0); return list(r)
+class _MI(ctypes.Structure):
+    _fields_ = [('cbSize', ctypes.c_ulong), ('rcMonitor', ctypes.c_long * 4), ('rcWork', ctypes.c_long * 4), ('dwFlags', ctypes.c_ulong)]
+def work_area(x=None, y=None):
+    """work area (no taskbar) of the monitor at (x, y), or of the main one"""
+    if x is None:
+        r = (ctypes.c_long * 4)(); ctypes.windll.user32.SystemParametersInfoW(0x30, 0, r, 0); return list(r)
+    u = ctypes.windll.user32; u.MonitorFromPoint.restype = ctypes.c_void_p
+    mon = u.MonitorFromPoint(ctypes.c_longlong((int(y) << 32) | (int(x) & 0xFFFFFFFF)), 2)   # POINT by value; 2 = nearest monitor
+    mi = _MI(); mi.cbSize = ctypes.sizeof(_MI)
+    return list(mi.rcWork) if u.GetMonitorInfoW(ctypes.c_void_p(mon), ctypes.byref(mi)) else work_area()
 
 SPR = json.load(open(os.path.join(HERE, 'sprites.json'), encoding='utf-8')); DESK = SPR['desk']
 RW, RH = len(DESK['bg'][0]), len(DESK['bg'])                   # room size (art pixels)
@@ -65,21 +74,23 @@ def pix(key, rows, pal):
 
 def boss(frame):
     c = SPR['boss']; return pix(('boss', frame), c['frames'].get(frame) or c['frames']['normal'], c['pal'])
+TAG = ['ui']                                                    # 'room': redrawn every frame; 'ui': only when its numbers change
 def R(x, y, w, h, col):
-    x += OFF[0]; y += OFF[1]; cv.create_rectangle(x * Z, y * Z, (x + w) * Z, (y + h) * Z, fill=col, outline='')
-def img(x, y, im): cv.create_image((x + OFF[0]) * Z, (y + OFF[1]) * Z, image=im, anchor='nw')
+    x += OFF[0]; y += OFF[1]; cv.create_rectangle(x * Z, y * Z, (x + w) * Z, (y + h) * Z, fill=col, outline='', tags=TAG[0])
+def img(x, y, im): cv.create_image((x + OFF[0]) * Z, (y + OFF[1]) * Z, image=im, anchor='nw', tags=TAG[0])
 def text(x, y, s, font, col, anchor='w'):
     x += OFF[0]; y += OFF[1]
-    cv.create_text(x * Z + Z, y * Z + Z, text=s, anchor=anchor, fill=EDGE, font=font)   # 1-pixel drop shadow, readable on wood
-    cv.create_text(x * Z, y * Z, text=s, anchor=anchor, fill=col, font=font)
+    cv.create_text(x * Z + Z, y * Z + Z, text=s, anchor=anchor, fill=EDGE, font=font, tags=TAG[0])   # 1-pixel drop shadow, readable on wood
+    cv.create_text(x * Z, y * Z, text=s, anchor=anchor, fill=col, font=font, tags=TAG[0])
 
 def hhmm(ms):
     if not ms: return '--:--'
     d = datetime.fromtimestamp(ms / 1000)
     return d.strftime('%H:%M')
 
-jobs, hidden_until, seen, started = [], 0, 0, time.time()
-drive_st, drive_at, fetching = {}, {}, set()      # slug -> newest Drive status, when it was read; reads in flight
+jobs, hidden_until, started = [], 0, time.time()
+drive_st, drive_at, fetching, tried = {}, {}, set(), {}   # slug -> newest Drive status, when read; folders being read; folder -> last try
+DRIVE_EVERY = 20_000                              # with Claude closed: each skill's statuses are read this often
 FRESH = 60_000                                    # a session file older than this: Claude is closed or asleep, go to Drive
 
 def switched_off():
@@ -95,74 +106,151 @@ def objects(text):
         try: o, i = dec.raw_decode(text, i); out.append(o)
         except ValueError: i += 1
 
-def fetch(slug, rclone, path):
-    """read one film's status from Drive (in a thread: rclone takes seconds)"""
+def fetch(key, rclone, folder, slugs):
+    """read the statuses of these films of one skill from Drive in ONE rclone call (in a thread: it takes seconds)"""
     try:
-        r = subprocess.run([rclone or 'rclone', 'cat', path], capture_output=True, text=True, encoding='utf-8', timeout=60, creationflags=0x08000000)
-        got = [o for o in objects(r.stdout) if o.get('slug') == slug]
-        if r.returncode == 0 and got: drive_st[slug] = max(got, key=lambda o: o.get('updated', 0)); drive_at[slug] = time.time() * 1000
+        inc = [a for s in slugs for a in ('--include', s + '.json')]
+        r = subprocess.run([rclone or 'rclone', 'cat', folder, *inc], capture_output=True, text=True, encoding='utf-8', timeout=60, creationflags=0x08000000)
+        if r.returncode == 0:
+            at = time.time() * 1000
+            for s in slugs:
+                got = [o for o in objects(r.stdout) if o.get('slug') == s]
+                if got: drive_st[s] = max(got, key=lambda o: o.get('updated', 0)); drive_at[s] = at
     except Exception: pass                # offline / no rclone: keep the last numbers
-    finally: fetching.discard(slug)
+    finally: fetching.discard(key)
 
-held = {}                                         # slug -> (step, %) shown while that step had no real number
+held = {}                                         # slug -> {'step', 'pct'}: the % shown while that step had no real number
+DEF_EST = {'inputs': 120, 'research': 1800, 'plan': 5400, 'render': 14400, 'qa': 900, 'deliver': 300}   # timeline.ts VIDEO_STEPS
+STALE_MS = 15 * 60_000
+MAP = {'idle': -1, 'inputs': 0, 'research': 1, 'plan': 2, 'render': 3, 'qa': 4, 'deliver': 5, 'done': 6}
+
+def timeline(f, steps, now0, hold=None):
+    """hooks/timeline.ts timeline() for the jp video pipeline, line for line: (pct, seconds left or None, step, held).
+    steps = the model the plugin wrote: [{id, work, guess, est?}]; est falls back to the pipeline's defaults."""
+    num = lambda v: isinstance(v, (int, float)) and not isinstance(v, bool)
+    done = bool(f.get('done')) or f.get('step') == 'done' or f.get('stage') == 'done'
+    now = f.get('updated', now0) if not done and now0 - f.get('updated', now0) > STALE_MS else now0   # seenAt
+    stage = f.get('stage'); hist = dict(f.get('history') or {}); render = f.get('render'); act = f.get('activity') or ''
+    enc = '' if stage != 'render' else ('done' if f['encode'] >= 1 else 'run') if num(f.get('encode')) else \
+        (('run' if '.tmp.mp4' in act else 'done') if re.search(r'video_1080p(\.tmp)?\.mp4', act) else '')
+    no_render = stage == 'render' and not enc and not (render or 0) > 0 and (render is None or now - ((hist.get('render') or {}).get('start') or f.get('updated', now)) > 120_000)
+    r_done = stage == 'render' and (render or 0) >= 0.999 and not enc
+    ids = [s['id'] for s in steps]
+    est = [s.get('est') or DEF_EST.get(s['id']) for s in steps]
+    idx = MAP.get(stage or 'idle', -1); all_done = stage == 'done'
+    if r_done: idx = MAP['qa']
+    pk = ((0.95 + 0.04 * (f.get('encode') or 0) if enc == 'run' else 0.99) if enc else 0 if no_render else render) if stage == 'render' \
+        else f.get('plan') if stage == 'plan' else f.get('research') if stage == 'research' else f.get('progress')
+    progress = max(0, min(1, pk or 0))
+    if r_done and (hist.get('render') or {}).get('start'):
+        e = hist['render'].get('end') or f.get('updated'); hist['render'] = {'start': hist['render']['start'], 'end': e}; hist.setdefault('qa', {'start': e})
+    stop = f.get('claudeStop') or {}; pz = f.get('paused') or {}
+    def paused(sid): return pz.get(sid, 0) + (max(0, (now - stop['at']) / 1000) if stop.get('at') and (stage or f.get('step')) == sid else 0)
+    def took(i):
+        h = hist.get(ids[i]) or {}
+        return max(1, (h['end'] - h['start']) / 1000 - paused(ids[i])) if h.get('start') and h.get('end') else None
+    tooks = [took(i) for i in range(len(steps))]
+    done_t = [x for x in tooks if x is not None]; avg = sum(done_t) / len(done_t) if done_t else None
+    remaining, known = 0, True
+    ts = es = 0
+    for i in range(len(steps)):
+        if (all_done or i < idx) and tooks[i] and est[i] and tooks[i] <= 3 * est[i]: ts += tooks[i]; es += est[i]
+    pace = max(0.5, min(3, ts / es)) if es > 0 else 1
+    sv = []
+    for i in range(len(steps)):
+        s = {'id': ids[i], 'est': est[i]}
+        if all_done or i < idx: s.update(state='done'); sv.append(s); continue
+        if i == idx:
+            h = hist.get(ids[i]) or {}
+            el = max(0, (now - h['start']) / 1000 - paused(ids[i])) if h.get('start') else None
+            base = est[i] * pace if est[i] else avg
+            left = f['eta'] if num(f.get('eta')) else el * (1 - progress) / progress if progress > 0.03 and el else (base - (el or 0) if base and (el or 0) < base else None)
+            if left is None: known = False
+            else: remaining += left
+            s.update(state='now', elapsed=el, left=left); sv.append(s); continue
+        g = est[i] * pace if est[i] else avg
+        if g is None: known = False
+        else: remaining += g
+        s.update(state='wait', guess=g); sv.append(s)
+    if all_done: remaining = 0
+    cur = next((s for s in sv if s['state'] == 'now'), None)
+    spent = (cur or {}).get('elapsed') or 0
+    real = (bool(enc) or (render is not None and not no_render)) if stage == 'render' else progress > 0.03
+    cur_left = (cur['left'] if cur['left'] is not None and cur['left'] > 0 else None) if cur else 0
+    frac = 0
+    if cur: frac = min(0.99, max(0, progress if real else spent / max(1, spent + cur_left) if cur_left is not None else 0.9))
+    guesses = sum(s.get('guess') or 0 for s in sv if s['state'] == 'wait')
+    own = None if cur_left is None else cur_left + guesses
+    fin = f.get('finishAt'); overdue = 0
+    if not all_done and fin:
+        if fin > now: remaining = max((fin - now) / 1000, own or 0); known = True
+        elif own is not None: remaining = own; known = True
+        else: overdue = (now - fin) / 1000
+    elif not all_done and own is not None and known: remaining = own
+    rem = None if overdue else remaining if known else None
+    no_data = (not enc and not (render or 0) > 0) if stage == 'render' else not progress > 0.03
+    out_held = None
+    if not all_done and cur and rem is not None:
+        for i, s in enumerate(sv):
+            s['work'] = (tooks[i] if tooks[i] is not None and not (s['est'] and tooks[i] > 3 * s['est'] and not pz) else s['est'] or avg or 60) \
+                if s['state'] == 'done' else (s.get('guess') or 0) if s['state'] == 'wait' else 0
+        cur['work'] = max(1, spent + max(0, rem - guesses))
+        done_w = sum(s['work'] for s in sv if s['state'] == 'done')
+        counted = min(spent, 0.1 * (cur['est'] or spent)) if no_data else spent
+        total = (done_w + counted) / max(1, done_w + spent + rem)
+        if no_data: out_held = {'step': cur['id'], 'pct': total}
+        elif hold and hold.get('step') == cur['id']: total = max(total, hold['pct']); out_held = hold
+    else:
+        for s in sv: s['work'] = s['est'] or avg or 60
+        ww = sum(s['work'] for s in sv) or 1
+        total = (sum(s['work'] for s in sv if s['state'] == 'done') + (cur['work'] * (min(frac, 0.1) if no_data else frac) if cur else 0)) / ww
+    total = 1 if all_done else min(0.99, total)
+    step = 'done' if all_done else ids[idx] if 0 <= idx < len(ids) else stage
+    return round(total * 100), (None if rem is None else round(rem)), step, out_held
 
 def project(j, st, now):
-    """the pane's numbers (register.tsx view(), 0.23.4) from a Drive status and the step model the plugin last wrote:
-    steps = [{id, work: done step's time / later step's guess, guess: later step's guess or the step's estimate}]"""
-    j = dict(j); steps = j.get('steps') or []
-    stage = st.get('stage'); enc = st.get('encode'); render = st.get('render')
-    if st.get('done') or stage == 'done':
+    """the widget's film from a Drive status, with the pane's own numbers (timeline() above)"""
+    j = dict(j)
+    if st.get('done') or st.get('stage') == 'done':
         j.update(state='done', pct=100, finishAt=None, doneAt=((st.get('history') or {}).get('done') or {}).get('start') or st.get('updated')); return j
-    if stage == 'render' and (render or 0) >= 0.999 and not isinstance(enc, (int, float)): stage = 'qa'
-    ids = [s['id'] for s in steps]
-    j['state'] = 'err' if st.get('blocked') else 'wait' if st.get('approval') else 'stop' if st.get('claudeStop') else 'run'
-    j['until'] = (st.get('claudeStop') or {}).get('until'); j['step'] = stage
-    if stage not in ids: return j
-    i = ids.index(stage); cur = steps[i]; hist = st.get('history') or {}; pz = st.get('paused') or {}
-    stop = st.get('claudeStop') or {}
-    def paused(sid): return pz.get(sid, 0) + (max(0, (now - stop['at']) / 1000) if stop.get('at') and sid == stage else 0)
-    h = hist.get(stage) or {}
-    el = max(0, (now - h['start']) / 1000 - paused(stage)) if h.get('start') else 0
-    if stage == 'render': p = (0.95 + 0.04 * enc if enc < 1 else 0.99) if isinstance(enc, (int, float)) else (render or 0)
-    else: p = st.get(stage if stage in ('plan', 'research') else 'progress') or 0
-    no_data = not isinstance(enc, (int, float)) and not (render or 0) > 0 if stage == 'render' else not p > 0.03
-    left = st['eta'] if isinstance(st.get('eta'), (int, float)) else el * (1 - p) / p if p > 0.03 and el else (cur['guess'] - el if cur.get('guess') and el < cur['guess'] else None)
-    later = sum(s['guess'] for s in steps[i + 1:])
-    own = None if left is None else left + later
-    fin = st.get('finishAt')
-    rem = max((fin - now) / 1000, own or 0) if fin and fin > now else own     # past Claude's finish with no own estimate: overdue
-    j['finishAt'] = now + rem * 1000 if rem is not None else fin
-    if rem is not None:
-        # time-based: time worked / (time worked + time left), done steps by their own time (estimate if far over)
-        def took(s):
-            hs = hist.get(s['id']) or {}
-            if not (hs.get('start') and hs.get('end')): return s['work']
-            t = max(1, (hs['end'] - hs['start']) / 1000 - paused(s['id']))
-            return s['guess'] if s.get('guess') and t > 3 * s['guess'] and not pz else t
-        done_w = sum(took(s) for s in steps[:i])
-        counted = min(el, 0.1 * (cur.get('guess') or el)) if no_data else el
-        total = (done_w + counted) / max(1, done_w + el + rem)
-    else:
-        W = sum(s['guess'] or s['work'] for s in steps) or 1
-        frac = min(0.99, max(0, p if not no_data else 0.9))
-        total = (sum(s['guess'] or s['work'] for s in steps[:i]) + (cur['guess'] or cur['work']) * (min(frac, 0.1) if no_data else frac)) / W
-    hd = held.get(j.get('slug'))
-    if no_data: held[j.get('slug')] = (stage, total)
-    elif hd and hd[0] == stage: total = max(total, hd[1])                 # the first real number never makes it drop
-    j['pct'] = round(100 * min(0.99, total))
+    pct, rem, step, h = timeline(st, j.get('steps') or [], now, held.get(j.get('slug')))
+    if h: held[j.get('slug')] = h
+    else: held.pop(j.get('slug'), None)
+    j.update(pct=pct, step=step, finishAt=None if rem is None else now + rem * 1000, until=(st.get('claudeStop') or {}).get('until'),
+             state='err' if st.get('blocked') else 'wait' if st.get('approval') else 'stop' if st.get('claudeStop') else 'run')
     return j
 
-_t = 1_000_000_000_000
-# step b half done by its estimate, no Claude finish time: (100 + 50) / (100 + 50 + 50)
-assert project({'slug': 't', 'steps': [{'id': 'a', 'work': 100, 'guess': 0}, {'id': 'b', 'work': 100, 'guess': 100}]},
-               {'stage': 'b', 'progress': 0.5, 'history': {'b': {'start': _t - 50_000}}}, _t)['pct'] == 75
-assert project({'steps': []}, {'stage': 'done'}, _t)['pct'] == 100
+def selftest():
+    """run taskbar/timeline-cases.mjs (the pane's own case table) through timeline(): exact %, time left and step"""
+    text = open(os.path.join(HERE, 'timeline-cases.mjs'), encoding='utf-8').read()
+    book = json.loads(text[text.index('{'):text.rindex('}') + 1]); now = book['now']; bad = 0
+    def absol(f):
+        f = json.loads(json.dumps(f))
+        for k in ('updated', 'finishAt', 'claudeAt', 'beat'):
+            if num0(f.get(k)): f[k] = now + f[k] * 1000
+        for h in (f.get('history') or {}).values():
+            for k in ('start', 'end'):
+                if num0(h.get(k)): h[k] = now + h[k] * 1000
+        cs = f.get('claudeStop')
+        if cs:
+            for k in ('at', 'until'):
+                if num0(cs.get(k)): cs[k] = now + cs[k] * 1000
+        return f
+    for c in book['cases']:
+        f = absol(c['film']); hold = (c.get('ctx') or {}).get('held')
+        pct, rem, step, _ = timeline(f, c['model'], now, hold)
+        ok = pct == c['pct'] and rem == c['remaining'] and step == c['step']
+        if ok and 'samePctAfter' in c.get('want', {}): ok = timeline(f, c['model'], now + c['want']['samePctAfter'] * 1000, hold)[0] == pct
+        if not ok: bad += 1; print(f"FAIL {c['name']}: got {pct}% {rem}s {step}, want {c['pct']}% {c['remaining']}s {c['step']}")
+    print(f"{len(book['cases']) - bad}/{len(book['cases'])} cases pass"); return bad
+
+def num0(v): return isinstance(v, (int, float)) and not isinstance(v, bool)
 
 def load():
     """every 2 s: quit when the pane's button turned the widget off, else merge the films of every Claude session;
     a film whose session stopped writing (Claude closed or asleep) is followed on Drive every 30 s"""
-    global jobs, seen
-    if not DEMO and switched_off(): os._exit(0)    # quit at once: pending redraws would hit a destroyed canvas
+    global jobs
+    if not DEMO and switched_off(): startup(False); os._exit(0)    # quit at once: pending redraws would hit a destroyed canvas
     now = time.time() * 1000
     best = {}                                       # slug -> (job, file updated, rclone, drive)
     files = [DEMO] if DEMO else [os.path.join(LIVE, SESS + '.json')] if SESS else [os.path.join(LIVE, n) for n in (os.listdir(LIVE) if os.path.isdir(LIVE) else []) if n.endswith('.json')]
@@ -173,16 +261,24 @@ def load():
             for j in d.get('jobs', []):
                 if j.get('state') != 'gone' and (j['slug'] not in best or u > best[j['slug']][1]): best[j['slug']] = (j, u, d.get('rclone'), d.get('drive'))
         except Exception: pass         # half-written: next poll
-    got, newest = [], 0
+    got, want = [], {}                              # want: (rclone, skill folder) -> films to read from Drive
     for slug, (j, u, rclone, drive) in best.items():
+        fresh = u                                   # when this film's numbers were last known to be live
         if not DEMO and now - u > FRESH and j.get('skill') and drive:
-            if slug not in fetching and now - drive_at.get(slug, 0) > 30_000:
-                fetching.add(slug)
-                threading.Thread(target=fetch, args=(slug, rclone, f"{drive}/{j['skill']}/status/{slug}.json"), daemon=True).start()
-            if slug in drive_st and drive_at[slug] > u: j = project(j, drive_st[slug], now); u = drive_at[slug]
+            k = (rclone or 'rclone', f"{drive}/{j['skill']}/status")
+            if now - drive_at.get(slug, 0) > DRIVE_EVERY: want.setdefault(k, []).append(slug)
+            if slug in drive_st and drive_at[slug] > u:
+                st = drive_st[slug]; j = project(j, st, now)
+                fresh = max(st.get('beat') or 0, st.get('updated') or 0) or drive_at[slug]   # the cloud's own heartbeat
         if j.get('state') == 'done' and now - (j.get('doneAt') or u) > 10 * 60_000: continue   # done 10 min ago (by the film's own time)
-        got.append(j); newest = max(newest, u)
-    jobs, seen = got, newest
+        if j.get('state', 'run') == 'run' and now - fresh > 5 * 60_000: j = {**j, 'state': 'stale'}   # this film has gone quiet
+        got.append(j)
+    for (rclone, folder), slugs in want.items():
+        if (rclone, folder) not in fetching and now - tried.get((rclone, folder), 0) > DRIVE_EVERY:   # also when a read failed
+            tried[(rclone, folder)] = now
+            fetching.add((rclone, folder))
+            threading.Thread(target=fetch, args=((rclone, folder), rclone, folder, slugs), daemon=True).start()
+    jobs = got
     root.after(2000, load)
 
 def summary(now):
@@ -192,8 +288,7 @@ def summary(now):
     pcts = [j['pct'] for j in jobs if j.get('pct') is not None]
     pct = round(sum(pcts) / len(pcts)) if pcts else None
     states = [j.get('state', 'run') for j in jobs]
-    st = next((s for s in ('err', 'wait', 'stop') if s in states), 'done' if all(s == 'done' for s in states) else 'run')
-    if st == 'run' and now - seen > 5 * 60_000: st = 'stale'
+    st = next((s for s in ('err', 'wait', 'stop', 'stale') if s in states), 'done' if all(s == 'done' for s in states) else 'run')
     until = next((j['until'] for j in jobs if j.get('until')), None)
     line = {'err': 'có lỗi', 'wait': 'chờ bạn', 'done': 'xong rồi', 'stale': 'mất tín hiệu',
             'stop': 'dừng → ' + hhmm(until) if until else 'Claude dừng'}.get(st, 'xong ' + hhmm(main.get('finishAt')))
@@ -238,7 +333,7 @@ def bubble(x, y, kind):
     for a, b, w, c in EMO[kind]: R(x + a * 2, y + b * 2, w * 2, 2, c)
 
 def poly(pts, col):
-    cv.create_polygon([((x + OFF[0]) * Z, (y + OFF[1]) * Z)[k] for x, y in pts for k in (0, 1)], fill=col, outline='')
+    cv.create_polygon([((x + OFF[0]) * Z, (y + OFF[1]) * Z)[k] for x, y in pts for k in (0, 1)], fill=col, outline='', tags=TAG[0])
 
 # ---- light, baked per pixel into the room picture (Tk has no alpha): the desk lamp's warm pool, night dimming
 def _rgb(c): return int(c[1:3], 16), int(c[3:5], 16), int(c[5:7], 16)
@@ -276,7 +371,7 @@ def lit(layer, night, pulse):
     return _img[key]
 
 # ---- where the boss goes on a break (sprite top-left; desk front row y 116, so he never crosses the globe or chair)
-SEAT, CORNER, DOWN = (70, 70), (124, 74), (124, 116)
+SEAT, CORNER, DOWN = (70, 70), (122, 74), (122, 116)   # the desk ends at x 119: he walks round it, not through it
 SPOTS = [('plant', (34, 116)), ('front', (68, 116)), ('phone', (108, 116))]
 CYCLE, WORK, SPEED = 60, 36, 24        # 60 % at the desk, 40 % on a break; walks at 24 art px per second
 DESK_BASE = 142                         # feet below this line: in front of the desk
@@ -348,6 +443,23 @@ def room(pct, st, s):
     img(0, 0, lit('fg', night, pulse))
     if front: img(bx + shake, by + bob, boss(fr))
     motes(s, night)
+    R(112, 97, 5, 6, '#E8E2D0'); R(112, 97, 5, 1, '#FFFFFF'); R(117, 99, 1, 2, '#E8E2D0'); R(113, 98, 3, 1, '#6D4C41')   # coffee mug
+    for i in range(2):
+        k = (s / 1.6 + i / 2) % 1
+        R(113 + i * 2 + round(math.sin(s * 3 + i)), 95 - k * 9, 1, 2, '#F5F5F5' if k < 0.5 else '#CFD8DC')
+    for i, (x, y) in enumerate(((14, 66), (150, 14), (26, 132))):   # sparkles: globe, plant, small plant (none on his walk)
+        k = (s * 0.7 + i * 0.37) % 2.2
+        if k < 0.5:
+            c = '#FFFFFF' if k < 0.25 else '#FFF59D'; R(x, y - 1, 1, 3, c); R(x - 1, y, 3, 1, c)
+    for t0, d in list(gains):                                                          # "+N%" rises from the number
+        a = s - t0
+        if a > 2.2: gains.remove((t0, d)); continue
+        text(64, -18 - a * 6, f'+{d}%', ('Consolas', -11 * Z, 'bold'), '#7CF08A')
+    if s - quarter[0] < 1.2:                                                           # crossed 25/50/75 %: a golden flash
+        k = (s - quarter[0]) / 1.2
+        for i in range(12):
+            ang = i * math.pi / 6; r = 6 + k * 40
+            R(round(86 + r * math.cos(ang)), round(80 + r * math.sin(ang) * 0.7), 2, 2, '#F5B800' if i % 2 else '#FFF59D')
     if act == 'walk' and int(walked / 6) % 2:                                       # little dust puffs at his feet
         R(bx + 6, by + 46, 2, 1, '#D7C4A8'); R(bx + 24, by + 46, 2, 1, '#D7C4A8')
     if rush:
@@ -359,7 +471,7 @@ def room(pct, st, s):
                 y = by + 18 + i * 6; R(bx - 8 - (i % 2) * 3, y, 6, 1, '#FFFFFF'); R(bx + 34 + (i % 2) * 3, y, 6, 1, '#FFFFFF')
         for i in range(3):                                                         # papers flying off the desk
             k = (s / 1.1 + i / 3) % 1
-            px = 100 + i * 12 + k * 30; py = 104 - 40 * k + 50 * k * k
+            px = 104 + i * 8 + k * 28; py = 104 - 30 * k + 50 * k * k
             R(round(px), round(py), 5, 4, '#F5F5F5'); R(round(px), round(py), 5, 1, '#C9D3DD')
         d = int(s * 6) % 3                                                         # sweat flies
         R(bx + 30, by + 6 + d * 2, 2, 3, '#81D4FA'); R(bx, by + 8 + d * 2, 2, 3, '#81D4FA')
@@ -370,7 +482,7 @@ def room(pct, st, s):
         n, sp = (8, 0.5) if rush else (4, 1.0)
         for i in range(n):
             k = (s / sp + i / n) % 1
-            if k < 0.85: R(62 + (i * 7) % 26, 92 - k * (22 if rush else 16), 3, 3, '#B9FFE9' if i % 2 else '#FFF59D')
+            if k < 0.85: R(63 + (i * 7) % 22, 100 - k * 8, 2, 2, '#B9FFE9' if i % 2 else '#FFF59D')   # on the screen, under his face
     if spot == 'plant' and act == 'visit':                                         # watering the little plant
         for i in range(3):
             k = (s / 0.9 + i / 3) % 1
@@ -400,19 +512,28 @@ def room(pct, st, s):
         text(RW / 2, 43, 'XONG!', ('Consolas', -18 * Z, 'bold'), '#FFFFFF', 'center')
         img(bx + 30, by - 10 - (2 if s % 1 < 0.5 else 0), pix(('bub', 'ok'), DESK['bub']['ok'], DESK['pal']))
 
+last = [None]
+gains, quarter, prev_pct = [], [-9.0], [None]   # "+N%" floats, when a quarter was crossed, the % last seen
 def draw():
     now = time.time() * 1000
     # nothing running: away, except for the first minute after it is turned on (so the button visibly does something)
     if now < hidden_until or (not jobs and time.time() - started > 60): root.withdraw()
     else:
         s = time.time(); pct, st, line, doing = summary(now)
-        cv.delete('all'); frame(st); panel(pct, st, line, s); room(pct, st, s); footer(doing)
+        if pct is not None and prev_pct[0] is not None and pct > prev_pct[0]:
+            gains.append((s, pct - prev_pct[0]))
+            if pct // 25 > prev_pct[0] // 25: quarter[0] = s
+        prev_pct[0] = pct
+        key = (pct, st, line, doing, st != 'run' or s % 1.6 < 1.2)   # the panel's LED blink is part of it
+        if key != last[0]:                     # text is the costly part: frame, panel and footer only when they change
+            last[0] = key; TAG[0] = 'ui'; cv.delete('all'); frame(st); panel(pct, st, line, s); footer(doing)
+        TAG[0] = 'room'; cv.delete('room'); room(pct, st, s)
         if root.state() == 'withdrawn': root.deiconify(); root.lift()
-    root.after(50, draw)
+    root.after(1000 if root.state() == 'withdrawn' else 50, draw)
 
 def place():
     L, T, Rr, B = work_area()
-    try: x, y = json.load(open(POSF, encoding='utf-8'))['pos']
+    try: x, y = json.load(open(POSF, encoding='utf-8'))['pos']; L, T, Rr, B = work_area(x + W * Z // 2, y + H * Z // 2)
     # shortcut: a new session's widget starts at one of 4 spots picked by its name, so two may still meet; drag one away
     except Exception: x, y = Rr - W * Z - 12 - (sum(map(ord, SESS)) % 4) * (W * Z + 8), B - H * Z
     x = max(L, min(Rr - W * Z, x)); y = max(T, min(B - H * Z, y))   # keep it on screen after a resolution change
@@ -423,7 +544,22 @@ def open_session():
     try: os.startfile('claude://')
     except OSError: pass
 
+LNK = os.path.join(os.environ.get('APPDATA', ''), 'Microsoft', 'Windows', 'Start Menu', 'Programs', 'Startup', f'Van phong pixel widget{SUF}.lnk')
+def startup(on):
+    """keep (on) or remove the Startup shortcut that brings this widget back after a restart"""
+    if DEMO: return
+    if not on:
+        try: os.remove(LNK)
+        except OSError: pass
+        return
+    args = f'"{os.path.abspath(__file__)}"' + (f' --session {SESS}' if SESS else '')
+    ps = ("$s = (New-Object -ComObject WScript.Shell).CreateShortcut($env:VP_LNK); $s.TargetPath = $env:VP_EXE; "
+          "$s.Arguments = $env:VP_ARGS; $s.WorkingDirectory = $env:VP_DIR; $s.Save()")
+    env = {**os.environ, 'VP_LNK': LNK, 'VP_EXE': sys.executable, 'VP_ARGS': args, 'VP_DIR': HERE}
+    threading.Thread(target=lambda: subprocess.run(['powershell', '-NoProfile', '-Command', ps], env=env, capture_output=True, timeout=30, creationflags=0x08000000), daemon=True).start()
+
 def turn_off():
+    startup(False)
     if not DEMO:
         try: os.makedirs(HOME, exist_ok=True); json.dump({'on': False}, open(SWITCH, 'w', encoding='utf-8'))
         except OSError: pass
@@ -456,4 +592,5 @@ def release(ev):
 cv.bind('<ButtonPress-1>', press); cv.bind('<B1-Motion>', move); cv.bind('<ButtonRelease-1>', release)
 cv.bind('<Button-3>', menu)
 
-place(); load(); draw(); root.mainloop()
+if SELFTEST: sys.exit(1 if selftest() else 0)
+startup(True); place(); load(); draw(); root.mainloop()
