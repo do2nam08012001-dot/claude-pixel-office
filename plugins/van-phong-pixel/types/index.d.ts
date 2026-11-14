@@ -26,6 +26,8 @@ export type Film = {
   beat?: number
   /** last time Claude itself made a tool call in the cloud session */
   claudeAt?: number
+  /** Claude's turn stopped on an API error (reported by the office plugin in the cloud); cleared when Claude acts again */
+  claudeStop?: { reason: string; until: number | null; at: number }
   /** seconds left in the current step */
   eta?: number | null
   blocked?: boolean

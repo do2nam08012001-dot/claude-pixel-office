@@ -120,3 +120,28 @@ test('/vp: Claude idle (usage limit) is shown even while files keep moving', asy
   expect(text).toMatch(/Hết hạn mức — CLAUDE ĐANG DỪNG/)
   await ui.unmount()
 })
+
+// usage limit: the cloud plugin reports it on Drive (no guessing), the office shows when it reopens
+test('cloud: a turn stopped by the usage limit is reported with drive.sh stop', async ($, on) => {
+  const calls: string[][] = []
+  engine(on, calls)
+  on('classic.StopFailure', () => ({}))
+  await $.session.start({ cwd: '/home/user/repo-jp-history-video', surface: 'desktop', isInteractive: true })
+  await ($ as any).classic.StopFailure({ error: 'rate_limit' })
+  for (let i = 0; i < 20 && !calls.some(a => a.includes('stop')); i++) await new Promise(r => setTimeout(r, 25))
+  const stop = calls.find(a => a.includes('stop'))
+  expect(stop?.[3]).toBe('rate_limit')
+})
+
+test('/vp: a reported stop says why and until when', async ($, on) => {
+  const t = Date.now(), until = t + 2 * 3600_000
+  const f = { slug: 'lim', skill: 'jp-history-video', title: 'Dừng hạn mức', stage: 'plan', claudeAt: t - 60_000, claudeStop: { reason: 'rate_limit', until, at: t - 30_000 }, updated: t, history: { plan: { start: t - 3600_000 } } }
+  engine(on, [], JSON.stringify(f))
+  await $.session.start({ cwd: 'D:/x/repo-jp-history-video', surface: 'desktop', isInteractive: true })
+  await $.tool.call({ tool: 'Bash', command: 'bash local/send.sh lim --title "lim"' })
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  await ui.press({ key: 'lam-moi' })
+  const { text } = await $.command.run({ command: 'vp' })
+  expect(text).toMatch(/Dừng hạn mức — CLAUDE ĐANG DỪNG \(hết hạn mức · mở lại lúc \d\d:\d\d\)/)
+  await ui.unmount()
+})

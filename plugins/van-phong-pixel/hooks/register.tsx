@@ -191,13 +191,14 @@ function summary(list: Film[], now: number) {
   if (!list.length) return 'Chưa có việc nào trong văn phòng.'
   return list.slice(0, 8).map(f => {
     const v = view(f, now), cur = v.idx >= 0 && v.idx < v.steps.length ? v.steps[v.idx] : null
-    const state = f.blocked ? 'LỖI' : f.approval ? 'CHỜ DUYỆT' : v.allDone ? 'XONG' : isClaudeIdle(f, now) ? 'CLAUDE ĐANG DỪNG (hết hạn mức?)' : 'đang làm'
+    const state = f.blocked ? 'LỖI' : f.approval ? 'CHỜ DUYỆT' : v.allDone ? 'XONG' : isClaudeIdle(f, now) ? `CLAUDE ĐANG DỪNG (${stopWhy(f) || 'hết hạn mức?'})` : 'đang làm'
     const eta = v.allDone ? '' : v.overdue ? ` · quá giờ dự kiến ${dur(v.overdue)}` : v.remaining != null ? ` · còn ~${dur(v.remaining)}` : ''
     return `• ${f.title || f.slug} — ${state} · ${Math.round(v.total * 100)}%${cur ? ` · bước ${v.idx + 1}/${v.steps.length} ${cur.label}` : ''}${eta}${f.message ? ` · ${f.message}` : ''}`
   }).join('\n')
 }
 // Claude itself idle (usage limit, waiting) while background work still beats; a render runs on its own, so it does not count there
-const isClaudeIdle = (f: Film, now: number) => f.source === 'drive' && !!f.claudeAt && now - f.claudeAt > STALE_MS && f.stage !== 'render'
+const isClaudeIdle = (f: Film, now: number) => f.source === 'drive' && (!!f.claudeStop || (!!f.claudeAt && now - f.claudeAt > STALE_MS && f.stage !== 'render'))
+const stopWhy = (f: Film) => !f.claudeStop ? '' : f.claudeStop.reason === 'rate_limit' ? `hết hạn mức${f.claudeStop.until ? ' · mở lại lúc ' + clock(f.claudeStop.until) : ''}` : `lỗi ${f.claudeStop.reason}`
 const isDone = (f: Film) => !!f.done || f.step === 'done' || f.stage === 'done'
 
 async function refresh($: any) {
@@ -358,6 +359,7 @@ function describe(e: any): string {
   return tool.replace(/^mcp__[^_]+__/, '')
 }
 let etaAsks = 0, lastEnsure = 0
+let limits: { kind: string; percentUsed: number; resetsAt?: string }[] = []
 const STAGE_MARK = /drive\.sh["']?\s+mark\s+(start|inputs|research_done|plan_done|render_start|render_done)\b([^\n;&|]*)/
 function askEta($: any, command: string) {
   if (/drive\.sh["']?\s+mark\s+eta\s+\d/.test(command) || /drive\.sh["']?\s+mark\s+note\s+.*\s\d+(\.\d+)?\s*$/m.test(command)) return
@@ -461,7 +463,7 @@ async function drawOffice($: any, e: any) {
       took: s.took ? dur(s.took) : undefined, elapsed: s.elapsed ? dur(s.elapsed) : undefined,
       left: s.state === 'now' && !v.progress && s.est && (s.elapsed ?? 0) > s.est ? `quá dự kiến ${dur((s.elapsed ?? 0) - s.est)}` : s.left != null ? `~${dur(s.left)}` : undefined, guess: s.guess != null ? dur(s.guess) : undefined,
     }))
-    const stale = kind !== 'stale' ? '' : now - f.updated > STALE_MS ? `Không cập nhật ${dur((now - f.updated) / 1000)}: có thể đã dừng.` : `Claude không làm gì ${dur((now - (f.claudeAt ?? now)) / 1000)} (hết hạn mức hoặc đang chờ); việc nền vẫn chạy.`
+    const stale = kind !== 'stale' ? '' : now - f.updated > STALE_MS ? `Không cập nhật ${dur((now - f.updated) / 1000)}: có thể đã dừng.` : f.claudeStop ? `Claude dừng: ${stopWhy(f)}; việc nền vẫn chạy.` : `Claude không làm gì ${dur((now - (f.claudeAt ?? now)) / 1000)} (có thể hết hạn mức hoặc đang chờ); việc nền vẫn chạy.`
     // running: the cloud's latest note (what it is doing now) and the file it touched last
     const td = (f as any).todo as { done: number; total: number; current: string } | undefined
     // what the cloud is doing: its todo item, else its note, else the render % or the last file it touched
@@ -582,7 +584,7 @@ export const register: Register = on => {
     if (!act.length) return next(e)
     const { Box, Text, Button } = $.ui.resolve(e)
     const f = act[0], now = Date.now(), v = view(f, now)
-    const flag = f.blocked ? 'LỖI · ' : f.approval ? 'CHỜ DUYỆT · ' : isClaudeIdle(f, now) ? 'CLAUDE ĐANG DỪNG · ' : ''
+    const flag = f.blocked ? 'LỖI · ' : f.approval ? 'CHỜ DUYỆT · ' : isClaudeIdle(f, now) ? `CLAUDE DỪNG${f.claudeStop ? ': ' + stopWhy(f) : ''} · ` : ''
     const eta = v.remaining != null ? ` · còn ~${dur(v.remaining)}` : ''
     const td = (f as any).todo as { current?: string } | undefined
     const doing = td?.current || f.message || ''
@@ -593,6 +595,17 @@ export const register: Register = on => {
         <Button key="vp-mo" label="Mở văn phòng" onPress={async () => { const o: any = await $.ui.open({ id: PANE, title: TITLE }); await update($, paneOpen, () => !!o?.isPlaced) }} />
       </Box>
     )
+  })
+
+  // cloud: keep the account's usage windows; when a turn stops on an API error, tell the office why and until when
+  on('session.measure', ($, e, next) => { limits = ((e as any).rateLimits ?? limits) as typeof limits; return next(e) })
+  on('classic.StopFailure', ($, e, next) => {
+    if (cloudRoot) {
+      const reason = String((e as any).error ?? 'unknown')
+      const full = limits.filter(l => l.percentUsed >= 100 && l.resetsAt).map(l => l.resetsAt as string).sort().pop() ?? ''
+      void $.process.run(['bash', `${cloudRoot}/cloud/drive.sh`, 'stop', reason, reason === 'rate_limit' ? full : ''], { timeoutMs: 40000 }).catch(() => {})
+    }
+    return next(e)
   })
 
   // follow jobs this session sends (before the upload starts, so the office shows it at once)
