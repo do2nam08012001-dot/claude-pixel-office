@@ -47,7 +47,7 @@ root = tk.Tk(); root.withdraw()
 Z = max(1, round(root.winfo_fpixels('1i') / 96))               # 1 at 100-149 %, 2 at 150 %+
 root.overrideredirect(True); root.attributes('-topmost', True); root.attributes('-transparentcolor', KEY); root.config(bg=KEY)
 cv = tk.Canvas(root, bg=KEY, highlightthickness=0, bd=0, width=W * Z, height=H * Z, cursor='hand2'); cv.pack()
-BIG, MID, LAB, FOOT = ('Consolas', -22 * Z, 'bold'), ('Consolas', -17 * Z, 'bold'), ('Segoe UI', -10 * Z), ('Segoe UI', -11 * Z, 'bold')
+BIG, MID, LAB, FOOT = ('Consolas', -22 * Z, 'bold'), ('Consolas', -15 * Z, 'bold'), ('Segoe UI', -10 * Z), ('Segoe UI', -11 * Z, 'bold')
 
 _img = {}
 def pix(key, rows, pal):
@@ -84,7 +84,7 @@ def switched_off():
 def load():
     """every 2 s: quit when the pane's button turned the widget off, else merge the films of every live session"""
     global jobs, seen
-    if not DEMO and switched_off(): root.destroy(); return
+    if not DEMO and switched_off(): os._exit(0)    # quit at once: pending redraws would hit a destroyed canvas
     got, newest = [], 0
     files = [DEMO] if DEMO else [os.path.join(LIVE, n) for n in (os.listdir(LIVE) if os.path.isdir(LIVE) else []) if n.endswith('.json')]
     for f in files:
@@ -131,8 +131,8 @@ def panel(pct, st, line, s):
     text(16, 11, f'{pct}%' if pct is not None else '—', BIG, '#7CF08A' if st in ('run', 'done') else LED[st])
     lab, val = (line.split(' ', 1) + [''])[:2] if line.startswith('xong ') else ('', line)
     if st == 'done': lab, val = 'Hoàn thành', 'XONG ✓'
-    text(RW - 6, 6, 'Xong lúc' if lab == 'xong' else lab or 'Trạng thái', LAB, '#8E9AB3', 'e')
-    text(RW - 6, 18, val, MID, '#7CF08A' if st == 'done' else '#FFFFFF', 'e')
+    text(RW - 6, 5, 'Xong lúc' if lab == 'xong' else lab or 'Trạng thái', LAB, '#8E9AB3', 'e')
+    text(RW - 6, 19, val, MID, '#7CF08A' if st == 'done' else '#FFFFFF', 'e')
     # HP-bar style progress: dark track, fill with a light top line, tick every 10 %
     R(5, 28, RW - 10, 6, '#0E121B')
     if pct:
@@ -318,7 +318,7 @@ def turn_off():
     if not DEMO:
         try: os.makedirs(HOME, exist_ok=True); json.dump({'on': False}, open(SWITCH, 'w', encoding='utf-8'))
         except OSError: pass
-    root.destroy()
+    os._exit(0)
 
 def hide(minutes):
     global hidden_until
