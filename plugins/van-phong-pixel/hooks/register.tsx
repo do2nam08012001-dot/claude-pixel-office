@@ -30,7 +30,7 @@ const finish = new Map<string, number>()   // slug -> finish time shown (ms)
 const paneOpen = atom({ plugin: 'van-phong-pixel', key: 'paneOpen' } as const, false)
 // learned stage durations (seconds, median of the last films) per "skill:stage"; seeds the estimates of new films
 let learned: Record<string, number> = {}
-const LEARN = 'learned-v1'
+const LEARN = 'learned-v2'
 // cloud film session: repo root (has cloud/drive.sh) when this session runs in the cloud; live reports are throttled
 let cloudRoot = '', liveAct = '', liveTodos = '', liveDirty = false, livePushing = false, liveLast = 0
 const openOthers = atom({ plugin: 'van-phong-pixel', key: 'openOthers' } as const, false)
@@ -87,7 +87,9 @@ function view(f: Film, now: number): View {
   const cur0 = idx > 0 && idx < steps.length ? steps[idx] : null
   const n = seen.get(f.slug)
   if (cur0 && n && n.step === cur0.id && n.from && now - n.at < HANDOFF_MS) scene = { ...scene, handoff: { from: n.from, to: n.to }, handoffAge: (now - n.at) / 1000, handoffAt: n.at }
-  const tooks = steps.map(s => (h[s.id]?.start && h[s.id]?.end ? (h[s.id].end! - h[s.id].start) / 1000 : undefined))
+  // seconds Claude was stopped in each step (usage limit, errors) do not count as work
+  const paused = (id: string) => (f.paused?.[id] ?? 0) + (f.claudeStop?.at && (f.stage ?? f.step) === id ? Math.max(0, (now - f.claudeStop.at) / 1000) : 0)
+  const tooks = steps.map(s => (h[s.id]?.start && h[s.id]?.end ? Math.max(1, (h[s.id].end! - h[s.id].start) / 1000 - paused(s.id)) : undefined))
   const doneT = tooks.filter((x): x is number => typeof x === 'number')
   const avg = doneT.length ? doneT.reduce((a, b) => a + b, 0) / doneT.length : null
   let remaining: number | null = 0, known = true, frac = 0
@@ -99,7 +101,7 @@ function view(f: Film, now: number): View {
   const sv: StepView[] = steps.map((s, i) => {
     if (allDone || i < idx) { const took = tooks[i]; return { ...s, state: 'done', took, w: took ?? s.est ?? avg ?? 60, work: 0 } }
     if (i === idx) {
-      const elapsed = h[s.id]?.start ? Math.max(0, (now - h[s.id].start) / 1000) : undefined
+      const elapsed = h[s.id]?.start ? Math.max(0, (now - h[s.id].start) / 1000 - paused(s.id)) : undefined
       // time left: the job's own ETA, else from the reported share, else the (pace-scaled) estimate while it still holds.
       // A step past its estimate with no reported share has NO honest ETA: say so instead of a number that keeps sliding.
       const base = s.est ? s.est * pace : avg
@@ -400,11 +402,11 @@ async function learn($: any, list: Film[]) {
   let db: { d: Record<string, number[]>; seen: string[] } = { d: {}, seen: [] }
   try { db = ((await $.store.get(LEARN)) as typeof db) ?? db } catch { /* first run */ }
   let changed = false
-  for (const f of list) for (const [stage, h] of Object.entries(f.history ?? {})) {
+  for (const f of list.filter(isDone)) for (const [stage, h] of Object.entries(f.history ?? {})) {
     if (!h?.start || !h.end || !f.skill) continue
     const id = `${f.slug}:${stage}`
     if (db.seen.includes(id)) continue
-    const k = `${f.skill}:${stage}`, s = (h.end - h.start) / 1000
+    const k = `${f.skill}:${stage}`, s = (h.end - h.start) / 1000 - (f.paused?.[stage] ?? 0)
     if (s > 5) { db.d[k] = [...(db.d[k] ?? []), s].slice(-8); changed = true }
     db.seen = [...db.seen, id].slice(-400)
   }

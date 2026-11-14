@@ -28,6 +28,8 @@ export type Film = {
   claudeAt?: number
   /** Claude's turn stopped on an API error (reported by the office plugin in the cloud); cleared when Claude acts again */
   claudeStop?: { reason: string; until: number | null; at: number }
+  /** seconds Claude was stopped, per stage (left out of step times) */
+  paused?: Record<string, number>
   /** seconds left in the current step */
   eta?: number | null
   blocked?: boolean
