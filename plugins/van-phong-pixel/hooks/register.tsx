@@ -62,11 +62,14 @@ type View = { over: boolean; overdue: number; steps: StepView[]; idx: number; al
 function view(f: Film, now: number): View {
   let steps: Step[], idx: number, allDone: boolean, progress: number, scene: any
   // the final encode (frames are done) shows as a sub-step of Render: the cloud's last file is the 1080p output
-  const enc = f.stage === 'render' && /video_1080p(\.tmp)?\.mp4/.test(f.activity ?? '') ? (/\.tmp\.mp4/.test(f.activity!) ? 'run' : 'done') : ''
+  // the cloud reports encode 0..1 (both passes) and encodePass; before that, the 1080p output file is the sign
+  const enc = f.stage !== 'render' ? '' : typeof f.encode === 'number' ? (f.encode >= 1 ? 'done' : 'run')
+    : /video_1080p(\.tmp)?\.mp4/.test(f.activity ?? '') ? (/\.tmp\.mp4/.test(f.activity!) ? 'run' : 'done') : ''
+  const encPct = typeof f.encode === 'number' && enc === 'run' ? ` lượt ${f.encodePass ?? 1}/2 · ${Math.round(f.encode * 100)}%` : ''
   // render 0 % / no number for over 2 min = the cloud's render watcher is not reporting: say so, time it by the estimate
   const noRender = f.stage === 'render' && !enc && !((f.render ?? 0) > 0) && (f.render == null || now - (f.history?.render?.start ?? f.updated) > 120_000)
   const rDone = f.stage === 'render' && (f.render ?? 0) >= 0.999 && !enc
-  const rnote = f.stage !== 'render' ? '' : enc === 'run' ? 'Nén video cuối (khung hình xong 100%)' : enc ? 'Đã nén video cuối, chờ cloud chốt bước Render' : noRender ? 'Render: chưa có số liệu render' : `Render ${Math.round((f.render ?? 0) * 100)}%`
+  const rnote = f.stage !== 'render' ? '' : enc === 'run' ? `Nén video cuối${encPct} (khung hình xong 100%)` : enc ? 'Đã nén video cuối, chờ cloud chốt bước Render' : noRender ? 'Render: chưa có số liệu render' : `Render ${Math.round((f.render ?? 0) * 100)}%`
   if (Array.isArray(f.workflow) && f.workflow.length) {
     steps = f.workflow.map((s, i) => ({ id: String(s.id ?? i), label: String(s.label ?? s.id ?? `Bước ${i + 1}`), role: (ROLES.includes(s.role) ? s.role : ROLES[Math.min(i, 5)]) as Role, est: typeof s.est === 'number' ? s.est : undefined }))
     allDone = !!f.done || f.step === 'done'
@@ -83,7 +86,7 @@ function view(f: Film, now: number): View {
     idx = map[f.stage ?? 'idle'] ?? -1; allDone = f.stage === 'done'
     if (rDone) idx = map.qa
     // share of the current stage: render %, the cloud's notes (research / plan), upload % (inputs)
-    const pk = f.stage === 'render' ? (enc ? (enc === 'run' ? 0.95 : 0.99) : noRender ? 0 : f.render) : f.stage === 'plan' ? f.plan : f.stage === 'research' ? f.research : f.progress
+    const pk = f.stage === 'render' ? (enc ? (enc === 'run' ? 0.95 + 0.04 * (f.encode ?? 0) : 0.99) : noRender ? 0 : f.render) : f.stage === 'plan' ? f.plan : f.stage === 'research' ? f.research : f.progress
     progress = Math.max(0, Math.min(1, pk ?? 0))
     scene = legacy(rDone ? { ...f, stage: 'qa' } : f)
     if (noRender) scene.noPct = true

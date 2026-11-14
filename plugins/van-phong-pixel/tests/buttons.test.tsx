@@ -187,9 +187,10 @@ test('/vp: render with no numbers says so; the final encode shows under Render',
   const hist = { inputs: { start: H(48000), end: H(47917) }, research: { start: H(47917), end: H(46597) }, plan: { start: H(46597), end: H(3960) }, render: { start: H(3960) } }
   const a = { slug: 'tam0', skill: 'jp-explainer-video', title: 'Tamiya A', stage: 'render', render: 0, message: '', activity: 'frame_0412.png', updated: t, history: hist }
   const b = { ...a, slug: 'tam1', title: 'Tamiya B', activity: 'video_1080p.tmp.mp4' }
-  engine(on, [], JSON.stringify(a) + JSON.stringify(b))
+  const c = { ...a, slug: 'tam2', title: 'Tamiya C', render: 1, encode: 0.6, encodePass: 2, eta: 300 }
+  engine(on, [], JSON.stringify(a) + JSON.stringify(b) + JSON.stringify(c))
   await $.session.start({ cwd: 'D:/x/repo-jp-explainer-video', surface: 'desktop', isInteractive: true })
-  for (const s of ['tam0', 'tam1']) await $.tool.call({ tool: 'Bash', command: `bash local/send.sh ${s} --title "${s}"` })
+  for (const s of ['tam0', 'tam1', 'tam2']) await $.tool.call({ tool: 'Bash', command: `bash local/send.sh ${s} --title "${s}"` })
   const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
   await ui.press({ key: 'lam-moi' })
   const { text } = await $.command.run({ command: 'vp' })
@@ -197,5 +198,6 @@ test('/vp: render with no numbers says so; the final encode shows under Render',
   expect(text).not.toMatch(/Tamiya A[^\n]*Render 0%/)
   expect(text).toMatch(/Tamiya A[^\n]*còn ~\d+ giờ/)
   expect(text).toMatch(/Tamiya B[^\n]*bước 4\/6 Render › nén video cuối[^\n]*Nén video cuối/)
+  expect(text).toMatch(/Tamiya C[^\n]*bước 4\/6 Render[^\n]*Nén video cuối lượt 2\/2 · 60%/)   // not QA yet: the encode is part of Render
   await ui.unmount()
 })

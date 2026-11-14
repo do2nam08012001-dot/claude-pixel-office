@@ -1,6 +1,6 @@
 {
   "name": "van-phong-pixel",
-  "version": "0.19.0",
+  "version": "0.19.1",
   "description": "Pixel-office pane for Claude Code: any multi-step workflow (or the jp video cloud pipeline) shown as employees at work, with progress, ETA, errors and approvals. Reads status files from a local folder and/or Google Drive every 30 s.",
   "types": "./types/index.d.ts",
   "license": "MIT"

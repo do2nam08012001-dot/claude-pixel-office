@@ -17,6 +17,9 @@ export type Film = {
   /** legacy video status (v1) */
   stage?: 'idle' | 'inputs' | 'research' | 'plan' | 'render' | 'qa' | 'deliver' | 'done'
   render?: number
+  /** final x264 encode after the last chunk: 0..1 over both passes, and which pass (1|2) */
+  encode?: number
+  encodePass?: number
   plan?: number
   research?: number
   /** finish time estimated by the job itself (ms); shown smoothed */
