@@ -78,7 +78,7 @@ def hhmm(ms):
     d = datetime.fromtimestamp(ms / 1000)
     return d.strftime('%H:%M')
 
-jobs, hidden_until, seen = [], 0, 0
+jobs, hidden_until, seen, started = [], 0, 0, time.time()
 drive_st, drive_at, fetching = {}, {}, set()      # slug -> newest Drive status, when it was read; reads in flight
 FRESH = 60_000                                    # a session file older than this: Claude is closed or asleep, go to Drive
 
@@ -111,7 +111,8 @@ def project(j, st, now):
     steps = [{id, work: done step's time / later step's guess, guess: later step's guess or the step's estimate}]"""
     j = dict(j); steps = j.get('steps') or []
     stage = st.get('stage'); enc = st.get('encode'); render = st.get('render')
-    if st.get('done') or stage == 'done': j.update(state='done', pct=100, finishAt=None); return j
+    if st.get('done') or stage == 'done':
+        j.update(state='done', pct=100, finishAt=None, doneAt=((st.get('history') or {}).get('done') or {}).get('start') or st.get('updated')); return j
     if stage == 'render' and (render or 0) >= 0.999 and not isinstance(enc, (int, float)): stage = 'qa'
     ids = [s['id'] for s in steps]
     j['state'] = 'err' if st.get('blocked') else 'wait' if st.get('approval') else 'stop' if st.get('claudeStop') else 'run'
@@ -179,7 +180,7 @@ def load():
                 fetching.add(slug)
                 threading.Thread(target=fetch, args=(slug, rclone, f"{drive}/{j['skill']}/status/{slug}.json"), daemon=True).start()
             if slug in drive_st and drive_at[slug] > u: j = project(j, drive_st[slug], now); u = drive_at[slug]
-        if j.get('state') == 'done' and now - u > 10 * 60_000: continue   # finished a while ago
+        if j.get('state') == 'done' and now - (j.get('doneAt') or u) > 10 * 60_000: continue   # done 10 min ago (by the film's own time)
         got.append(j); newest = max(newest, u)
     jobs, seen = got, newest
     root.after(2000, load)
@@ -401,7 +402,8 @@ def room(pct, st, s):
 
 def draw():
     now = time.time() * 1000
-    if now < hidden_until: root.withdraw()
+    # nothing running: away, except for the first minute after it is turned on (so the button visibly does something)
+    if now < hidden_until or (not jobs and time.time() - started > 60): root.withdraw()
     else:
         s = time.time(); pct, st, line, doing = summary(now)
         cv.delete('all'); frame(st); panel(pct, st, line, s); room(pct, st, s); footer(doing)

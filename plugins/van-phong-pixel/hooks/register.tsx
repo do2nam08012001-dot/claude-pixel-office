@@ -263,6 +263,7 @@ async function writeLive($: any, dir: string, list: Film[], drive = DEFAULT_DRIV
       state: isDone(f) ? 'done' : f.blocked ? 'err' : f.approval ? 'wait' : isClaudeIdle(f, now) ? 'stop' : 'run', until: f.claudeStop?.until ?? null,
       // what the widget needs to go on by itself from the Drive status when this session stops writing (Claude closed or asleep)
       skill: f.source === 'drive' ? f.skill : undefined,
+      doneAt: isDone(f) ? (f.history?.done?.start ?? f.updated) : null,   // the widget drops a film 10 min after this, as the pane does
       steps: v.steps.map(s => ({ id: s.id, work: Math.round(s.work), guess: Math.round(s.state === 'wait' ? (s.guess ?? s.work) : s.state === 'now' ? (s.est ?? s.work) : 0) })) }
   })
   const rclone = ((await $.store.get('rclone')) as string | undefined) ?? ''
