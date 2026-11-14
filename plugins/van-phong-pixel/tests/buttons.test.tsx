@@ -333,3 +333,20 @@ test('/vp: a step past its estimate with no real number - the % stays low', asyn
   expect(pc).toBeLessThan(25)
   await ui.unmount()
 })
+
+// delivery=chat: the video stays in the cloud session's chat, Drive has only a small report: no "download" button
+test('/vp: a film delivered in chat offers no download', async ($, on) => {
+  const t = Date.now()
+  const a = { slug: 'chat1', skill: 'jp-history-video', title: 'Trong chat', stage: 'done', delivery: 'chat', updated: t, history: {} }
+  const b = { ...a, slug: 'link1', title: 'Qua link', delivery: 'link' }
+  engine(on, [], JSON.stringify(a) + JSON.stringify(b))
+  await $.session.start({ cwd: 'D:/x/repo-jp-history-video', surface: 'desktop', isInteractive: true })
+  for (const s of ['chat1', 'link1']) await $.tool.call({ tool: 'Bash', command: `bash local/send.sh ${s} --title "${s}"` })
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  await ui.press({ key: 'lam-moi' })
+  expect(await ui.find({ type: 'Button', key: 'tai-chat1' })).toBeFalsy()
+  expect(await ui.find({ type: 'Button', key: 'tai-link1' })).toBeTruthy()
+  const { text } = await $.command.run({ command: 'vp' })
+  expect(text).toMatch(/Trong chat — XONG \(video nằm trong chat của phiên cloud\)/)
+  await ui.unmount()
+})

@@ -224,7 +224,7 @@ function summary(list: Film[], now: number) {
   if (!list.length) return 'Chưa có việc nào trong văn phòng.'
   return list.slice(0, 8).map(f => {
     const v = view(f, seenAt(f, now)), cur = v.idx >= 0 && v.idx < v.steps.length ? v.steps[v.idx] : null
-    const state = f.blocked ? 'LỖI' : f.approval ? 'CHỜ DUYỆT' : v.allDone ? 'XONG' : isClaudeIdle(f, now) ? `CLAUDE ĐANG DỪNG (${stopWhy(f) || 'hết hạn mức?'})` : 'đang làm'
+    const state = f.blocked ? 'LỖI' : f.approval ? 'CHỜ DUYỆT' : v.allDone ? ((f as any).delivery === 'chat' ? 'XONG (video nằm trong chat của phiên cloud)' : 'XONG') : isClaudeIdle(f, now) ? `CLAUDE ĐANG DỪNG (${stopWhy(f) || 'hết hạn mức?'})` : 'đang làm'
     const eta = v.allDone ? '' : v.overdue ? ` · quá giờ dự kiến ${dur(v.overdue)}` : v.remaining != null ? ` · còn ~${dur(v.remaining)}` : ''
     return `• ${f.title || f.slug} — ${state} · ${Math.round(v.total * 100)}%${cur ? ` · bước ${v.idx + 1}/${v.steps.length} ${cur.label}` : ''}${eta}${f.message ? ` · ${f.message}` : v.rnote && !v.allDone ? ` · ${v.rnote}` : ''}`
   }).join('\n')
@@ -373,7 +373,7 @@ async function refreshInner($: any) {
     if (before !== undefined && before !== now && now !== 'run') {
       const msg = now === 'err' ? `Lỗi · ${f.title || f.slug}: ${f.message || 'bị vướng'} — trả lời ngay trong phiên này`
         : now === 'wait' ? `Chờ duyệt · ${f.title || f.slug}: ${f.message || 'cần bạn trả lời'} — trả lời ngay trong phiên này`
-        : `Xong · ${f.title || f.slug} — gõ "lấy video" để tải về máy`
+        : (f as any).delivery === 'chat' ? `Xong · ${f.title || f.slug} — video nằm trong chat của phiên cloud` : `Xong · ${f.title || f.slug} — gõ "lấy video" để tải về máy`
       try { $.ui.toast(msg) } catch { /* no surface */ }
       void $.ui.notify(msg, { title: 'Văn phòng' }).catch(() => { /* notifications off */ })
     }
@@ -566,7 +566,7 @@ async function drawOffice($: any, e: any) {
     const v = view(f, seenAt(f, now)), kind = kindOf(f), focused = f.slug === shown?.slug
     const group = GROUP_VI[f.group ?? f.skill ?? ''] ?? f.group ?? f.skill ?? ''
     const waitEta = f.source === 'drive' && !finish.get(f.slug) && !v.allDone
-    const etaText = v.allDone ? 'đã xong' : kind === 'stale' ? 'im lặng — không ước lượng' : v.overdue ? `quá giờ dự kiến ${dur(v.overdue)} — chờ cloud báo lại` : waitEta ? 'đang chờ Claude ước giờ xong…' : v.over ? 'bước này quá dự kiến — chờ cloud báo %' : v.remaining == null ? 'chưa đủ dữ liệu để ước lượng' : `còn ~${dur(v.remaining)} · xong ~${clock(now + v.remaining * 1000)}`
+    const etaText = v.allDone ? ((f as any).delivery === 'chat' ? 'xong · video trong chat phiên cloud' : 'đã xong') : kind === 'stale' ? 'im lặng — không ước lượng' : v.overdue ? `quá giờ dự kiến ${dur(v.overdue)} — chờ cloud báo lại` : waitEta ? 'đang chờ Claude ước giờ xong…' : v.over ? 'bước này quá dự kiến — chờ cloud báo %' : v.remaining == null ? 'chưa đủ dữ liệu để ước lượng' : `còn ~${dur(v.remaining)} · xong ~${clock(now + v.remaining * 1000)}`
     const steps: CardStep[] = v.steps.map(s => ({
       label: s.label, role: s.role, state: s.state, w: s.work,
       took: s.took ? dur(s.took) + (s.est && s.took > 3 * s.est && !f.paused ? ' (gồm lúc dừng)' : '') : undefined, elapsed: s.elapsed ? dur(s.elapsed) : undefined,
@@ -589,7 +589,8 @@ async function drawOffice($: any, e: any) {
         <Box flexDirection="row" justifyContent="flex-end" gap={1}>
           {f.approval && !f.blocked ? pixBtn('duyet-' + f.slug, "✓ Duyệt", () => $.prompt.submit({ text: `Duyệt ${f.slug} — chuyển nguyên lời "duyệt" sang phiên cloud của phim này.` }), 'primary') : null}
           {f.approval || f.blocked ? pixBtn('sua-' + f.slug, f.blocked ? '› Trả lời lỗi' : '› Yêu cầu sửa', () => $.prompt.fill({ text: `${f.blocked ? 'Trả lời lỗi' : 'Yêu cầu sửa'} ${f.slug} (chuyển sang phiên cloud): ` }), 'wood') : null}
-          {v.allDone && f.source === 'drive' ? pixBtn('tai-' + f.slug, "↓ Tải video về", () => $.prompt.submit({ text: `Tải video ${f.slug} về máy: chạy local/fetch.sh ${f.slug}, rồi báo đường dẫn thư mục ket-qua.` }), 'primary') : null}
+          {/* delivery=chat: the video stays in the cloud session's chat, Drive holds only a small report: nothing to fetch */}
+          {v.allDone && f.source === 'drive' && (f as any).delivery !== 'chat' ? pixBtn('tai-' + f.slug, "↓ Tải video về", () => $.prompt.submit({ text: `Tải video ${f.slug} về máy: chạy local/fetch.sh ${f.slug}, rồi báo đường dẫn thư mục ket-qua.` }), 'primary') : null}
           {!focused ? pixBtn('xem-' + f.slug, "◉ Xem trong văn phòng", () => update($, focus, () => f.slug), 'wood') : null}
           {pixBtn('huy-' + f.slug, kind === 'stale' || v.allDone ? '✕ Xóa khỏi văn phòng' : '✕ Hủy theo dõi', () => drop($, f, kind === 'stale'), 'danger')}
         </Box>
