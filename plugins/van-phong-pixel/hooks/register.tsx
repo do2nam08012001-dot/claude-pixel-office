@@ -1,8 +1,10 @@
 import { atom, read, update } from 'claude-code'
 import type { Register } from 'claude-code'
-import type { Film, Owned, Poll, Role, Step } from '../types'
+import type { Film, Owned, Poll } from '../types'
 import { ASSETS } from './assets'
-import { officeSvg, legacy } from './scene'
+import { officeSvg } from './scene'
+import { timeline, liveSteps, isDone, STALE_MS } from './timeline'
+import type { View } from './timeline'
 import { cardSvg, headerSvg, footerSvg } from './cards'
 import type { CardStep } from './cards'
 
@@ -13,7 +15,6 @@ const POLL_MS = 5_000           // this session's jobs (local files + their Driv
 const SCAN_EVERY = 6            // full Drive scan (jobs of other sessions) every 6th poll (30 s)
 const DONE_KEEP = 10 * 60_000    // a finished job leaves the office 10 minutes after it is done
 const HANDOFF_MS = 25_000       // how long a noticed step change plays the hand-off walk
-const STALE_MS = 15 * 60_000
 const SVG_LIMIT = 130_500
 const DEFAULT_DRIVE = 'gdrive:jp-studio'
 const films = atom({ plugin: 'van-phong-pixel', key: 'films' } as const, [] as Film[], { shape: 'films-3' })
@@ -48,142 +49,21 @@ let sceneKey = '', sceneSvg = ''
 // double buffer: the old scene stays on top (overlay) while the new one loads underneath, then the overlay goes
 let shownSvg = '', overlaySvg = '', swapping = false
 
-// Legacy video pipeline (v1 status files of the jp video repos); est = rough seconds per stage
-const VIDEO_STEPS: Step[] = [
-  { id: 'inputs', label: 'Nhận đầu vào', role: 'fetch', est: 120 }, { id: 'research', label: 'Nghiên cứu', role: 'research', est: 1800 },
-  { id: 'plan', label: 'Kế hoạch', role: 'plan', est: 5400 }, { id: 'render', label: 'Render', role: 'build', est: 14400 },
-  { id: 'qa', label: 'QA', role: 'check', est: 900 }, { id: 'deliver', label: 'Giao phim', role: 'deliver', est: 300 },
-]
-const ROLES: Role[] = ['fetch', 'research', 'plan', 'build', 'check', 'deliver']
 const GROUP_VI: Record<string, string> = { 'jp-history-video': 'video lịch sử', 'jp-explainer-video': 'video explainer' }
 const dur = (s: number) => (s < 90 ? `${Math.max(1, Math.round(s))} giây` : s < 90 * 60 ? `${Math.round(s / 60)} phút` : `${Math.floor(Math.round(s / 60) / 60)} giờ ${Math.round(s / 60) % 60} phút`)
+// how long ago, never more than it really was: under a minute, then whole minutes (a card is not redrawn every second for it)
+const ago = (s: number) => (s < 60 ? 'dưới 1 phút' : s < 90 * 60 ? `${Math.floor(s / 60)} phút` : dur(s))
+const cardMemo = new Map<string, { key: string; svg: string }>()
 const clock = (ms: number) => { const d = new Date(ms); return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}` }
 
-type StepView = Step & { state: 'done' | 'now' | 'wait'; took?: number; elapsed?: number; left?: number | null; guess?: number | null; w: number; work: number }
-type View = { over: boolean; overdue: number; steps: StepView[]; idx: number; allDone: boolean; progress: number; frac: number; scene: any; total: number; remaining: number | null; known: boolean; rnote: string; barNow: number }
-
-function view(f: Film, now: number): View {
-  let steps: Step[], idx: number, allDone: boolean, progress: number, scene: any
-  // the final encode (frames are done) shows as a sub-step of Render: the cloud's last file is the 1080p output
-  // the cloud reports encode 0..1 (both passes) and encodePass; before that, the 1080p output file is the sign
-  const enc = f.stage !== 'render' ? '' : typeof f.encode === 'number' ? (f.encode >= 1 ? 'done' : 'run')
-    : /video_1080p(\.tmp)?\.mp4/.test(f.activity ?? '') ? (/\.tmp\.mp4/.test(f.activity!) ? 'run' : 'done') : ''
-  const encPct = typeof f.encode === 'number' && enc === 'run' ? ` lượt ${f.encodePass ?? 1}/2 · ${Math.round(f.encode * 100)}%` : ''
-  // render 0 % / no number for over 2 min = the cloud's render watcher is not reporting: say so, time it by the estimate
-  const noRender = f.stage === 'render' && !enc && !((f.render ?? 0) > 0) && (f.render == null || now - (f.history?.render?.start ?? f.updated) > 120_000)
-  const rDone = f.stage === 'render' && (f.render ?? 0) >= 0.999 && !enc
-  const rnote = f.stage !== 'render' ? '' : enc === 'run' ? `Nén video cuối${encPct} (khung hình xong 100%)` : enc ? 'Đã nén video cuối, chờ cloud chốt bước Render' : noRender ? 'Render: chưa có số liệu render' : `Render ${Math.round((f.render ?? 0) * 100)}%`
-  if (Array.isArray(f.workflow) && f.workflow.length) {
-    steps = f.workflow.map((s, i) => ({ id: String(s.id ?? i), label: String(s.label ?? s.id ?? `Bước ${i + 1}`), role: (ROLES.includes(s.role) ? s.role : ROLES[Math.min(i, 5)]) as Role, est: typeof s.est === 'number' ? s.est : undefined }))
-    allDone = !!f.done || f.step === 'done'
-    idx = allDone ? steps.length : steps.findIndex(s => s.id === f.step)
-    progress = Math.max(0, Math.min(1, f.progress ?? 0))
-    const labels: Record<string, string> = {}
-    for (const s of steps) if (!labels[s.role]) labels[s.role] = s.label
-    if (idx >= 0 && idx < steps.length) labels[steps[idx].role] = steps[idx].label
-    const active = idx >= 0 && idx < steps.length ? steps[idx].role : null
-    scene = { active, progress, doneRoles: steps.slice(0, Math.max(0, idx)).map(s => s.role).filter(r => r !== active), allDone, blocked: f.blocked, approval: f.approval, labels }
-  } else {
-    steps = VIDEO_STEPS.map(s => ({ ...s, est: learned[`${f.skill}:${s.id}`] ?? s.est, label: s.id === 'render' && enc ? `Render › ${enc === 'run' ? 'nén video cuối' : 'đã nén xong'}` : s.label }))
-    const map: Record<string, number> = { idle: -1, inputs: 0, research: 1, plan: 2, render: 3, qa: 4, deliver: 5, done: 6 }
-    idx = map[f.stage ?? 'idle'] ?? -1; allDone = f.stage === 'done'
-    if (rDone) idx = map.qa
-    // share of the current stage: render %, the cloud's notes (research / plan), upload % (inputs)
-    const pk = f.stage === 'render' ? (enc ? (enc === 'run' ? 0.95 + 0.04 * (f.encode ?? 0) : 0.99) : noRender ? 0 : f.render) : f.stage === 'plan' ? f.plan : f.stage === 'research' ? f.research : f.progress
-    progress = Math.max(0, Math.min(1, pk ?? 0))
-    scene = legacy(rDone ? { ...f, stage: 'qa' } : f)
-    if (noRender) scene.noPct = true
-    if (enc) scene.labels = { ...scene.labels, build: 'Nén video' }
-  }
-  let h = f.history ?? {}
-  if (rDone && h.render?.start) { const e = h.render.end ?? f.updated; h = { ...h, render: { start: h.render.start, end: e }, qa: h.qa ?? { start: e } } }
-  // a step that started in the last 40 s: the previous step's employee carries the work to the next room
-  const cur0 = idx > 0 && idx < steps.length ? steps[idx] : null
-  const n = seen.get(f.slug)
-  if (cur0 && n && n.step === cur0.id && n.from && now - n.at < HANDOFF_MS) scene = { ...scene, handoff: { from: n.from, to: n.to }, handoffAge: (now - n.at) / 1000, handoffAt: n.at }
-  // seconds Claude was stopped in each step (usage limit, errors) do not count as work
-  const paused = (id: string) => (f.paused?.[id] ?? 0) + (f.claudeStop?.at && (f.stage ?? f.step) === id ? Math.max(0, (now - f.claudeStop.at) / 1000) : 0)
-  const tooks = steps.map(s => (h[s.id]?.start && h[s.id]?.end ? Math.max(1, (h[s.id].end! - h[s.id].start) / 1000 - paused(s.id)) : undefined))
-  const doneT = tooks.filter((x): x is number => typeof x === 'number')
-  const avg = doneT.length ? doneT.reduce((a, b) => a + b, 0) / doneT.length : null
-  let remaining: number | null = 0, known = true, frac = 0
-  // how fast this job runs vs the estimates (finished steps): later steps are scaled by it
-  let tookSum = 0, estSum = 0
-  steps.forEach((s, i) => { if ((allDone || i < idx) && tooks[i] && s.est && tooks[i]! <= 3 * s.est) { tookSum += tooks[i]!; estSum += s.est } })
-  const pace = estSum > 0 ? Math.max(0.5, Math.min(3, tookSum / estSum)) : 1
-  let over = false
-  const sv: StepView[] = steps.map((s, i) => {
-    if (allDone || i < idx) { const took = tooks[i]; return { ...s, state: 'done', took, w: took ?? s.est ?? avg ?? 60, work: 0 } }
-    if (i === idx) {
-      const elapsed = h[s.id]?.start ? Math.max(0, (now - h[s.id].start) / 1000 - paused(s.id)) : undefined
-      // time left: the job's own ETA, else from the reported share, else the (pace-scaled) estimate while it still holds.
-      // A step past its estimate with no reported share has NO honest ETA: say so instead of a number that keeps sliding.
-      const base = s.est ? s.est * pace : avg
-      let left: number | null = typeof f.eta === 'number' ? f.eta
-        : progress > 0.03 && elapsed ? elapsed * (1 - progress) / progress
-        : base && (elapsed ?? 0) < base ? base - (elapsed ?? 0) : null
-      if (left === null && !(progress > 0.03)) over = true
-      if (left === null) known = false; else remaining! += left
-      // share of the current step done: reported progress, else time spent vs time still expected (never 100 %)
-      frac = progress > 0 ? progress : elapsed && left != null ? elapsed / (elapsed + left) : over ? 0.9 : 0
-      frac = Math.min(0.95, Math.max(0, frac))
-      return { ...s, state: 'now', elapsed, left, w: s.est ?? avg ?? ((elapsed ?? 0) + (left ?? 0) || 60), work: 0 }
-    }
-    const guess = s.est ? s.est * pace : avg
-    if (guess == null) known = false; else remaining! += guess
-    return { ...s, state: 'wait', guess, w: guess ?? 60, work: 0 }
-  })
-  if (allDone) remaining = 0
-  // Time line, kept consistent: the current step uses real progress when the job reports it (render %, notes,
-  // upload %), each later step shows its own estimate, and the total time left is never below the sum of the steps
-  // (Claude's estimate wins when it is longer).
-  const cur = sv.find(s => s.state === 'now')
-  const spentCur = cur?.elapsed ?? 0
-  const real = f.stage === 'render' ? !!enc || (f.render != null && !noRender) : progress > 0.03
-  const curLeft: number | null = cur ? (cur.left != null && cur.left > 0 ? cur.left : null) : 0
-  if (cur) {
-    frac = real ? progress : curLeft != null ? spentCur / Math.max(1, spentCur + curLeft) : 0.9
-    frac = Math.min(0.99, Math.max(0, frac))
-    cur.w = Math.max(1, spentCur + (curLeft ?? 0))
-  }
-  const own = curLeft == null ? null : curLeft + sv.reduce((a2, s) => a2 + (s.state === 'wait' ? (s.guess ?? 0) : 0), 0)
-  const fin = finish.get(f.slug)
-  let overdue = 0
-  if (!allDone && fin) {
-    if (fin > now) { remaining = Math.max((fin - now) / 1000, own ?? 0); known = true; over = false }
-    else if (own != null) { remaining = own; known = true }
-    else overdue = (now - fin) / 1000
-  } else if (!allDone && own != null && known) remaining = own
-  const rem = overdue ? null : known ? remaining : null
-  let total: number, barNow = frac   // barNow: how much of the current step's block the total bar fills
-  // no real number for the current step yet (render with no frame or encode, others ≤ 3 %)
-  const noData = f.stage === 'render' ? !enc && !((f.render ?? 0) > 0) : !(progress > 0.03)
-  // a step past its own estimate (own = null) still has Claude's time left: the % stays time-based, not 90 % of the work
-  if (!allDone && cur && rem != null) {
-    // % = time worked ÷ (time worked + the time left shown), so the % and "còn … · xong …" always agree; a step that
-    // ran far past its estimate with no recorded stop counts its estimate (the card marks it "gồm lúc dừng")
-    const guesses = sv.reduce((a, s) => a + (s.state === 'wait' ? (s.guess ?? 0) : 0), 0)
-    sv.forEach((s, i) => { s.work = s.state === 'done' ? (tooks[i] != null && !(s.est && tooks[i]! > 3 * s.est && !f.paused) ? tooks[i]! : s.est ?? avg ?? 60) : s.state === 'wait' ? (s.guess ?? 0) : 0 })
-    cur.work = Math.max(1, spentCur + Math.max(0, rem - guesses))
-    const doneW = sv.reduce((a, s) => a + (s.state === 'done' ? s.work : 0), 0)
-    // no real number: only up to 10 % of the step's estimate counts, so the % does not climb with the clock while
-    // Claude's fixed finish time is all there is
-    const counted = noData ? Math.min(spentCur, 0.1 * (cur.est ?? spentCur)) : spentCur
-    total = (doneW + counted) / Math.max(1, doneW + spentCur + rem)
-    // the first real number never makes the % drop below what the capped one showed
-    const held = capped.get(f.slug)
-    if (noData) capped.set(f.slug, { step: cur.id, pct: total })
-    else if (held && held.step === cur.id) total = Math.max(total, held.pct)
-    barNow = Math.min(1, (total * Math.max(1, doneW + spentCur + rem) - doneW) / cur.work)   // the bar's blocks add up to the %
-  } else {
-    // no honest time left: share of the WORK (each step's usual length)
-    for (const s of sv) s.work = s.est ?? avg ?? 60
-    const WW = sv.reduce((a, s) => a + s.work, 0) || 1
-    total = (sv.reduce((a, s) => a + (s.state === 'done' ? s.work : 0), 0) + (cur ? cur.work * (noData ? Math.min(frac, 0.1) : frac) : 0)) / WW
-  }
-  // the HP bar starts at the same share and fills exactly when the step should end
-  scene = { ...scene, progress: frac, rate: curLeft && curLeft > 0 ? (1 - frac) / curLeft : 0 }
-  return { over, overdue, steps: sv, idx, allDone, progress, frac, barNow, scene, total: allDone ? 1 : Math.min(0.99, total), remaining: rem, known, rnote }
+// the time line of each film is worked out ONCE per refresh (timeline.ts, a pure function) and read everywhere else,
+// so the card, the scene, /vp, the band and the widget show the same numbers; only that pass keeps the held %
+const views = new Map<string, { key: string; v: View }>()
+const ctxOf = (f: Film) => ({ finish: finish.get(f.slug), learned, held: capped.get(f.slug) })
+const vkey = (f: Film) => `${f.updated}:${finish.get(f.slug) ?? ''}`
+function view(f: Film): View {
+  const c = views.get(f.slug)
+  return c && c.key === vkey(f) ? c.v : timeline(f, Date.now(), ctxOf(f))
 }
 
 // Pull complete JSON objects out of concatenated text (rclone cat joins files; files may be pretty-printed).
@@ -223,7 +103,7 @@ async function rclone($: any): Promise<string> {
 function summary(list: Film[], now: number) {
   if (!list.length) return 'Chưa có việc nào trong văn phòng.'
   return list.slice(0, 8).map(f => {
-    const v = view(f, seenAt(f, now)), cur = v.idx >= 0 && v.idx < v.steps.length ? v.steps[v.idx] : null
+    const v = view(f), cur = v.idx >= 0 && v.idx < v.steps.length ? v.steps[v.idx] : null
     const state = f.blocked ? 'LỖI' : f.approval ? 'CHỜ DUYỆT' : v.allDone ? ((f as any).delivery === 'chat' ? 'XONG (video nằm trong chat của phiên cloud)' : 'XONG') : isClaudeIdle(f, now) ? `CLAUDE ĐANG DỪNG (${stopWhy(f) || 'hết hạn mức?'})` : 'đang làm'
     const eta = v.allDone ? '' : v.overdue ? ` · quá giờ dự kiến ${dur(v.overdue)}` : v.remaining != null ? ` · còn ~${dur(v.remaining)}` : ''
     return `• ${f.title || f.slug} — ${state} · ${Math.round(v.total * 100)}%${cur ? ` · bước ${v.idx + 1}/${v.steps.length} ${cur.label}` : ''}${eta}${f.message ? ` · ${f.message}` : v.rnote && !v.allDone ? ` · ${v.rnote}` : ''}`
@@ -232,9 +112,6 @@ function summary(list: Film[], now: number) {
 // Claude itself idle (usage limit, waiting) while background work still beats; a render runs on its own, so it does not count there
 const isClaudeIdle = (f: Film, now: number) => f.source === 'drive' && (!!f.claudeStop || (!!f.claudeAt && now - f.claudeAt > STALE_MS && f.stage !== 'render'))
 const stopWhy = (f: Film) => !f.claudeStop ? '' : f.claudeStop.reason === 'rate_limit' ? `hết hạn mức${f.claudeStop.until ? ' · mở lại lúc ' + clock(f.claudeStop.until) : ''}` : `lỗi ${f.claudeStop.reason}`
-const isDone = (f: Film) => !!f.done || f.step === 'done' || f.stage === 'done'
-// a film silent for 15 min is shown as it was at its last word: % and bar stop instead of counting time nobody confirmed
-const seenAt = (f: Film, now: number) => !isDone(f) && now - f.updated > STALE_MS ? f.updated : now
 
 // ---- taskbar widget (Windows only): taskbar/vp_taskbar.pyw draws the boss room above the taskbar with one % and one
 // finish time. One widget per session, showing that session's films only: on/off lives in
@@ -257,18 +134,22 @@ async function writeLive($: any, dir: string, list: Film[], drive = DEFAULT_DRIV
   const now = Date.now()
   // the same numbers the pane shows: % of the work, finish = now + time left
   const jobs = list.map(f => {
-    const v = view(f, seenAt(f, now))
+    const v = view(f)
     return { slug: f.slug, title: f.title || f.slug, step: f.stage ?? f.step, pct: v.allDone ? 100 : Math.round(v.total * 100),
-      finishAt: !v.allDone && v.remaining != null ? Math.round(now + v.remaining * 1000) : null,
+      finishAt: !v.allDone && v.remaining != null ? Math.round(v.at + v.remaining * 1000) : null,
       state: isDone(f) ? 'done' : f.blocked ? 'err' : f.approval ? 'wait' : isClaudeIdle(f, now) ? 'stop' : 'run', until: f.claudeStop?.until ?? null,
       // what the widget needs to go on by itself from the Drive status when this session stops writing (Claude closed or asleep)
       skill: f.source === 'drive' ? f.skill : undefined,
       doneAt: isDone(f) ? (f.history?.done?.start ?? f.updated) : null,   // the widget drops a film 10 min after this, as the pane does
-      steps: v.steps.map(s => ({ id: s.id, work: Math.round(s.work), guess: Math.round(s.state === 'wait' ? (s.guess ?? s.work) : s.state === 'now' ? (s.est ?? s.work) : 0) })) }
+      steps: liveSteps(v) }
   })
   const rclone = ((await $.store.get('rclone')) as string | undefined) ?? ''
-  try { await $.fs.write(`${dir}/live/${sessKey()}.json`, JSON.stringify({ updated: now, drive, rclone, jobs })) } catch { /* read-only home */ }
+  // written when it changes, and every 30 s anyway: the widget takes a file older than 60 s for a closed Claude
+  const body = JSON.stringify({ drive, rclone, jobs })
+  if (body === liveBody && now - liveAt < 30_000) return
+  try { await $.fs.write(`${dir}/live/${sessKey()}.json`, JSON.stringify({ updated: now, drive, rclone, jobs })); liveBody = body; liveAt = now } catch { /* read-only home */ }
 }
+let liveBody = '', liveAt = 0
 async function toggleWidget($: any) {
   const h = await home($)
   if (!isWin(h)) return
@@ -277,7 +158,7 @@ async function toggleWidget($: any) {
   try { await $.fs.write(`${dir}/widget.json`, JSON.stringify({ on: false })) } catch { /* closes a 0.22 widget (all sessions in one) */ }
   await update($, widgetOn, () => on)
   if (!on) return                      // the widget sees the switch within 2 s and closes itself
-  await writeLive($, dir, (await read($, films)) ?? [])
+  liveBody = ''; await writeLive($, dir, (await read($, films)) ?? [])
   if (!(await launchWidget($))) {
     await $.fs.write(`${dir}/widget-${sessKey()}.json`, JSON.stringify({ on: false })); await update($, widgetOn, () => false)
     try { $.ui.toast('Không chạy được widget: máy chưa có Python (python.org) để chạy pythonw') } catch { /* no surface */ }
@@ -308,7 +189,10 @@ async function refreshInner($: any) {
   if (drive && !bin) driveError = 'Drive: chưa cài rclone'
   else if (drive) {
     const fail = (r: any) => (r.stderr || 'rclone lỗi').split(/\r?\n/).filter((l: string) => l && !l.includes('NOTICE')).slice(-1)[0] || 'rclone lỗi'
-    if (ticks++ % SCAN_EVERY === 0 || mine0.some(m => !m.skill)) {
+    // the full scan (every skill folder: other sessions' jobs) only while the "other jobs" strip is open, at the first
+    // read, or for a job claimed without its skill; this session's own jobs are read every 5 s below either way
+    const wantAll = !!(await read($, openOthers)) || !scanOk || mine0.some(m => !m.skill)
+    if ((wantAll && ticks++ % SCAN_EVERY === 0) || mine0.some(m => !m.skill)) {
       try {
         const fresh: Film[] = []
         if (!skills.length || ticks % 60 === 1) {
@@ -362,7 +246,12 @@ async function refreshInner($: any) {
   // notice step changes (the previous step's role hands the work to the new one)
   const nowMs = Date.now()
   for (const f of list) {
-    const v = view(f, nowMs), cur = v.idx >= 0 && v.idx < v.steps.length ? v.steps[v.idx] : null, key = cur ? cur.id : v.allDone ? 'done' : 'idle'
+    const v = timeline(f, nowMs, ctxOf(f))
+    if (v.held) capped.set(f.slug, v.held)
+    views.set(f.slug, { key: vkey(f), v })
+  }
+  for (const f of list) {
+    const v = view(f), cur = v.idx >= 0 && v.idx < v.steps.length ? v.steps[v.idx] : null, key = cur ? cur.id : v.allDone ? 'done' : 'idle'
     const prev = seen.get(f.slug)
     if (!prev) seen.set(f.slug, { step: key, at: 0 })
     else if (prev.step !== key) { seen.set(f.slug, cur && v.idx > 0 ? { step: key, from: v.steps[v.idx - 1].role, to: cur.role, at: nowMs } : { step: key, at: 0 }) }
@@ -389,7 +278,7 @@ async function refreshInner($: any) {
   const want = (await read($, focus)) ?? ''
   const shown = list.find(f => f.slug === want) ?? list.find(f => !isDone(f))
   if (shown) {
-    const v = view(shown, Date.now())
+    const v = view(shown)
     const key = v.allDone ? `job-${shown.slug}` : `cur-${shown.slug}`
     const mark = `${key}:${v.idx}:${shown.blocked ? 1 : 0}:${shown.approval ? 1 : 0}`
     if (mark !== lastScrolled) { lastScrolled = mark; try { await $.ui.scroll({ in: PANE, to: { key }, block: 'center' }) } catch { /* pane closed */ } }
@@ -494,9 +383,10 @@ async function pump($: any) {
   } catch { /* offline: the next call tries again */ } finally { livePushing = false }
 }
 
+let learnDb: { d: Record<string, number[]>; seen: string[] } | null = null   // read from the store once per session
 async function learn($: any, list: Film[]) {
-  let db: { d: Record<string, number[]>; seen: string[] } = { d: {}, seen: [] }
-  try { db = ((await $.store.get(LEARN)) as typeof db) ?? db } catch { /* first run */ }
+  if (!learnDb) { learnDb = { d: {}, seen: [] }; try { learnDb = ((await $.store.get(LEARN)) as typeof learnDb) ?? learnDb } catch { /* first run */ } }
+  const db = learnDb!
   let changed = false
   for (const f of list.filter(isDone)) for (const [stage, h] of Object.entries(f.history ?? {})) {
     if (!h?.start || !h.end || !f.skill) continue
@@ -509,13 +399,6 @@ async function learn($: any, list: Film[]) {
   if (changed) { try { await $.store.set(LEARN, db) } catch { /* read-only */ } }
   const med = (a: number[]) => { const b = [...a].sort((x, y) => x - y); return b[Math.floor(b.length / 2)] }
   learned = Object.fromEntries(Object.entries(db.d).filter(([, v]) => v.length).map(([k, v]) => [k, med(v)]))
-}
-
-// shortcut: the last 60 scroll/focus moves of the pane go to ~/.claude/van-phong/scroll.log to diagnose the jump to the top; drop once fixed
-let paneOffset = 0, scrollLines: string[] = []
-async function scrollLog($: any, line: string) {
-  scrollLines = [...scrollLines, `${new Date().toISOString().slice(11, 19)} ${line}`].slice(-60)
-  try { const h = await home($); if (h) await $.fs.write(`${h}/.claude/van-phong/scroll.log`, scrollLines.join('\n') + '\n') } catch { /* no folder */ }
 }
 
 // the office drawing: shared by the side pane and the transcript row (cloud sessions place no panes)
@@ -536,7 +419,10 @@ async function drawOffice($: any, e: any) {
   const shown = list.find(f => f.slug === want) ?? active[0] ?? list[0]
   // the header keeps counting a film that hit an error after it was fixed (this session)
   const errs = list.filter(f => f.blocked || errSeen.has(f.slug)).length, waits = list.filter(f => f.approval && !f.blocked).length
-  const sceneState = { ...(shown ? view(shown, now).scene : { active: null, doneRoles: [] }), now, seed: SEED, hour: new Date(now).getHours() }
+  // a step that started in the last 25 s: the previous step's employee carries the work to the next room
+  const sv0 = shown ? view(shown) : null, cur0 = sv0 && sv0.idx > 0 && sv0.idx < sv0.steps.length ? sv0.steps[sv0.idx] : null, n0 = shown ? seen.get(shown.slug) : undefined
+  const handoff = cur0 && n0 && n0.step === cur0.id && n0.from && now - n0.at < HANDOFF_MS ? { handoff: { from: n0.from, to: n0.to }, handoffAge: (now - n0.at) / 1000, handoffAt: n0.at } : {}
+  const sceneState = { ...(sv0 ? sv0.scene : { active: null, doneRoles: [] }), ...handoff, now, seed: SEED, hour: new Date(now).getHours() }
   // progress is animated inside the SVG (HP bars run at the real rate), so only visible state changes redraw it
   // the HP bar is redrawn every 5 % (it animates smoothly in between), other visible changes redraw at once
   const key = JSON.stringify({ ...sceneState, now: undefined, progress: Math.round((sceneState.progress ?? 0) * 5), rate: undefined, handoffAge: undefined, px })
@@ -564,7 +450,7 @@ async function drawOffice($: any, e: any) {
   const pixBtn = (key: string, label: string, onPress: () => any, tone: 'wood' | 'primary' | 'danger' = 'wood') =>
     <Button key={key} label={label} onPress={onPress} variant={tone === 'primary' ? 'primary' : undefined} />
   const card = (f: Film) => {
-    const v = view(f, seenAt(f, now)), kind = kindOf(f), focused = f.slug === shown?.slug
+    const v = view(f), kind = kindOf(f), focused = f.slug === shown?.slug
     const group = GROUP_VI[f.group ?? f.skill ?? ''] ?? f.group ?? f.skill ?? ''
     const waitEta = f.source === 'drive' && !finish.get(f.slug) && !v.allDone
     const etaText = v.allDone ? ((f as any).delivery === 'chat' ? 'xong · video trong chat phiên cloud' : 'đã xong') : kind === 'stale' ? 'im lặng — không ước lượng' : v.overdue ? `quá giờ dự kiến ${dur(v.overdue)} — chờ cloud báo lại` : waitEta ? 'đang chờ Claude ước giờ xong…' : v.over ? 'bước này quá dự kiến — chờ cloud báo %' : v.remaining == null ? 'chưa đủ dữ liệu để ước lượng' : `còn ~${dur(v.remaining)} · xong ~${clock(now + v.remaining * 1000)}`
@@ -583,7 +469,11 @@ async function drawOffice($: any, e: any) {
       || (f.stage === 'render' ? v.rnote : f.activity ? `vừa sửa ${f.activity}` : '')) : ''
     const message = f.blocked || f.approval ? (f.message || (f.blocked ? 'Công việc báo bị vướng.' : 'Công việc chờ bạn trả lời.')) : stale || (live ? `Đang làm: ${live}` : '')
     const reply = f.blocked || f.approval ? (f.source === 'drive' ? 'Trả lời ngay trong phiên gốc này — Claude chuyển sang phiên cloud.' : 'Trả lời trong phiên đang chạy việc này.') : stale && claudeIdle(f) ? 'Khi hạn mức mở lại: nhắn phiên cloud "làm tiếp".' : stale ? 'Hỏi Claude ở phiên gốc kiểm tra phiên cloud.' : live && f.activity ? `Claude vừa: ${f.activity}` : ''
-    const svg = cardSvg({ title: f.title || f.slug, group, status: fixing ? { t: "Đang sửa", kind: "wait" } : { t: KIND_T[kind], kind }, total: v.total, etaText, steps, progress: v.frac, barNow: v.barNow, message, reply, updatedText: `${dur((now - f.updated) / 1000)} trước`, focused }, W)
+    const input = { title: f.title || f.slug, group, status: fixing ? { t: "Đang sửa", kind: "wait" as const } : { t: KIND_T[kind], kind }, total: v.total, etaText, steps, progress: v.frac, barNow: v.barNow, message, reply, updatedText: `${ago((now - f.updated) / 1000)} trước`, focused }
+    // the same card is not drawn again (its SVG is rebuilt only when something on it changed)
+    const ck = JSON.stringify([input, W]), hit = cardMemo.get(f.slug)
+    const svg = hit && hit.key === ck ? hit.svg : cardSvg(input, W)
+    cardMemo.set(f.slug, { key: ck, svg })
     return (
       <Box key={v.allDone ? `job-${f.slug}` : `cur-${f.slug}`} flexDirection="column">
         {Svg ? <Svg source={svg} alt={`${f.title || f.slug}: ${KIND_T[kind]}, tổng ${Math.round(v.total * 100)}%, ${etaText}`} /> : <Text>{f.title || f.slug} · {KIND_T[kind]} · {Math.round(v.total * 100)}% · {etaText}</Text>}
@@ -613,7 +503,7 @@ async function drawOffice($: any, e: any) {
         <Box key="khac" flexDirection="column">
           <Box flexDirection="row" justifyContent="space-between">
             <Text dimColor>Việc của phiên khác đang chạy: {other.length}</Text>
-            {pixBtn("khac-mo", showOthers ? 'Ẩn' : 'Xem', () => update($, openOthers, (v: boolean) => !v), 'wood')}
+            {pixBtn("khac-mo", showOthers ? 'Ẩn' : 'Xem', async () => { await update($, openOthers, (v: boolean) => !v); ticks = 0; void refresh($) }, 'wood')}
           </Box>
           {!showOthers ? null : other.slice(0, 6).map(f => {
             const k = isDone(f) ? 'xong' : now - f.updated > STALE_MS ? `im lặng ${dur((now - f.updated) / 1000)}` : 'đang chạy'
@@ -667,8 +557,8 @@ export const register: Register = on => {
     }
     await $.command.register({ name: 'vp', description: 'Mở ô văn phòng pixel: tiến độ, lỗi và việc chờ duyệt của các quy trình đang chạy' })
     void $.ui.open({ id: PANE, title: TITLE }).then((o: any) => update($, paneOpen, () => !!o?.isPlaced)).catch(() => {})
-    void refresh($)
-    $.clock.every(POLL_MS, () => { void refresh($) })
+    // a cloud film session only reports (drive.sh live); it shows no office, so it reads nothing from Drive
+    if (!cloudRoot) { void refresh($); $.clock.every(POLL_MS, () => { void refresh($) }) }
     return next(e)
   })
 
@@ -692,20 +582,7 @@ export const register: Register = on => {
     return drawOffice($, e)
   })
 
-  on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
-    const o = (e.props as any)?.scroll?.offset
-    if (typeof o === 'number') paneOffset = o
-    return drawOffice($, e)
-  })
-
-  on('ui.scroll', { requestId: PANE }, async ($, e, next) => {
-    const s: any = e
-    void scrollLog($, `scroll ${s.origin?.kind ?? '?'} by=${s.by} offset=${s.offset} cur=${paneOffset} rows=${s.bodyRows}/${s.contentRows}`)
-    return next(e)
-  })
-  // the desktop app resets the pane to the top on every redraw after a Button press (reported upstream); nothing the
-  // plugin does changes it, so the log stays as evidence only
-  on('ui.focus', { requestId: PANE }, async ($, e, next) => { void scrollLog($, `focus ${(e as any).element ?? '-'} by ${(e as any).origin?.kind}`); return next(e) })
+  on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => drawOffice($, e))
 
   on('ui.close', async ($, e, next) => {
     if ((e as any).id === PANE) await update($, paneOpen, () => false)
@@ -718,7 +595,7 @@ export const register: Register = on => {
     const act = ((await read($, films)) ?? []).filter(f => !isDone(f))
     if (!act.length) return next(e)
     const { Box, Text, Button } = $.ui.resolve(e)
-    const f = act[0], now = Date.now(), v = view(f, seenAt(f, now))
+    const f = act[0], now = Date.now(), v = view(f)
     const flag = f.blocked ? 'LỖI · ' : f.approval ? 'CHỜ DUYỆT · ' : isClaudeIdle(f, now) ? `CLAUDE DỪNG${f.claudeStop ? ': ' + stopWhy(f) : ''} · ` : ''
     const eta = v.remaining != null ? ` · còn ~${dur(v.remaining)}` : ''
     const td = (f as any).todo as { current?: string } | undefined
