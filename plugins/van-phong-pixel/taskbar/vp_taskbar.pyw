@@ -104,8 +104,11 @@ def fetch(slug, rclone, path):
     except Exception: pass                # offline / no rclone: keep the last numbers
     finally: fetching.discard(slug)
 
+held = {}                                         # slug -> (step, %) shown while that step had no real number
+
 def project(j, st, now):
-    """the pane's numbers (register.tsx view()) from a Drive status and the step model the plugin last wrote"""
+    """the pane's numbers (register.tsx view(), 0.23.4) from a Drive status and the step model the plugin last wrote:
+    steps = [{id, work: done step's time / later step's guess, guess: later step's guess or the step's estimate}]"""
     j = dict(j); steps = j.get('steps') or []
     stage = st.get('stage'); enc = st.get('encode'); render = st.get('render')
     if st.get('done') or stage == 'done': j.update(state='done', pct=100, finishAt=None); return j
@@ -114,25 +117,44 @@ def project(j, st, now):
     j['state'] = 'err' if st.get('blocked') else 'wait' if st.get('approval') else 'stop' if st.get('claudeStop') else 'run'
     j['until'] = (st.get('claudeStop') or {}).get('until'); j['step'] = stage
     if stage not in ids: return j
-    i = ids.index(stage); cur = steps[i]; h = (st.get('history') or {}).get(stage) or {}
+    i = ids.index(stage); cur = steps[i]; hist = st.get('history') or {}; pz = st.get('paused') or {}
     stop = st.get('claudeStop') or {}
-    paused = ((st.get('paused') or {}).get(stage, 0) + (max(0, (now - stop['at']) / 1000) if stop.get('at') else 0))
-    el = max(0, (now - h['start']) / 1000 - paused) if h.get('start') else 0
+    def paused(sid): return pz.get(sid, 0) + (max(0, (now - stop['at']) / 1000) if stop.get('at') and sid == stage else 0)
+    h = hist.get(stage) or {}
+    el = max(0, (now - h['start']) / 1000 - paused(stage)) if h.get('start') else 0
     if stage == 'render': p = (0.95 + 0.04 * enc if enc < 1 else 0.99) if isinstance(enc, (int, float)) else (render or 0)
     else: p = st.get(stage if stage in ('plan', 'research') else 'progress') or 0
-    real = (render or 0) > 0 or isinstance(enc, (int, float)) if stage == 'render' else p > 0.03
+    no_data = not isinstance(enc, (int, float)) and not (render or 0) > 0 if stage == 'render' else not p > 0.03
     left = st['eta'] if isinstance(st.get('eta'), (int, float)) else el * (1 - p) / p if p > 0.03 and el else (cur['guess'] - el if cur.get('guess') and el < cur['guess'] else None)
-    frac = min(0.99, max(0, p if real else el / max(1, el + left) if left else 0.9))
-    W = sum(s['work'] for s in steps) or 1
-    j['pct'] = round(100 * min(0.99, (sum(s['work'] for s in steps[:i]) + cur['work'] * frac) / W))
-    own = None if left is None else left + sum(s['guess'] for s in steps[i + 1:])
+    later = sum(s['guess'] for s in steps[i + 1:])
+    own = None if left is None else left + later
     fin = st.get('finishAt')
-    j['finishAt'] = max(fin, now + own * 1000) if fin and fin > now and own is not None else fin if fin and fin > now else now + own * 1000 if own is not None else fin
+    rem = max((fin - now) / 1000, own or 0) if fin and fin > now else own     # past Claude's finish with no own estimate: overdue
+    j['finishAt'] = now + rem * 1000 if rem is not None else fin
+    if rem is not None:
+        # time-based: time worked / (time worked + time left), done steps by their own time (estimate if far over)
+        def took(s):
+            hs = hist.get(s['id']) or {}
+            if not (hs.get('start') and hs.get('end')): return s['work']
+            t = max(1, (hs['end'] - hs['start']) / 1000 - paused(s['id']))
+            return s['guess'] if s.get('guess') and t > 3 * s['guess'] and not pz else t
+        done_w = sum(took(s) for s in steps[:i])
+        counted = min(el, 0.1 * (cur.get('guess') or el)) if no_data else el
+        total = (done_w + counted) / max(1, done_w + el + rem)
+    else:
+        W = sum(s['guess'] or s['work'] for s in steps) or 1
+        frac = min(0.99, max(0, p if not no_data else 0.9))
+        total = (sum(s['guess'] or s['work'] for s in steps[:i]) + (cur['guess'] or cur['work']) * (min(frac, 0.1) if no_data else frac)) / W
+    hd = held.get(j.get('slug'))
+    if no_data: held[j.get('slug')] = (stage, total)
+    elif hd and hd[0] == stage: total = max(total, hd[1])                 # the first real number never makes it drop
+    j['pct'] = round(100 * min(0.99, total))
     return j
 
 _t = 1_000_000_000_000
-assert project({'steps': [{'id': 'a', 'work': 100, 'guess': 0}, {'id': 'b', 'work': 100, 'guess': 100}]},
-               {'stage': 'b', 'history': {'b': {'start': _t - 50_000}}}, _t)['pct'] == 75
+# step b half done by its estimate, no Claude finish time: (100 + 50) / (100 + 50 + 50)
+assert project({'slug': 't', 'steps': [{'id': 'a', 'work': 100, 'guess': 0}, {'id': 'b', 'work': 100, 'guess': 100}]},
+               {'stage': 'b', 'progress': 0.5, 'history': {'b': {'start': _t - 50_000}}}, _t)['pct'] == 75
 assert project({'steps': []}, {'stage': 'done'}, _t)['pct'] == 100
 
 def load():
