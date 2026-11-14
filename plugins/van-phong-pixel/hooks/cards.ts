@@ -3,7 +3,7 @@
 export type CardStep = { label: string; role: string; state: 'done' | 'now' | 'wait'; w: number; took?: string; elapsed?: string; left?: string; guess?: string }
 export type CardInput = {
   title: string; group: string; status: { t: string; kind: Kind }
-  total: number; etaText: string; steps: CardStep[]; progress: number; message?: string; reply?: string; updatedText: string; focused: boolean
+  total: number; etaText: string; steps: CardStep[]; progress: number; barNow?: number; message?: string; reply?: string; updatedText: string; focused: boolean
 }
 type Kind = 'run' | 'wait' | 'err' | 'done' | 'stale'
 
@@ -103,7 +103,7 @@ export function cardSvg(c: CardInput, W: number) {
   let y = 8 + plateH + 6
   o += T(pad, y + 26, `${Math.round(c.total * 100)}%`, k.main, 26, ' font-weight="800" stroke="#0E1320" stroke-width="3" paint-order="stroke"', MONO)
   o += TR(W - pad, y + 22, fit(c.etaText, inner - 96, 12.5), TEXT, 12.5, ' font-weight="600"')
-  o += totalBar(pad + 2, y + 36, inner - 4, 10, c.steps, c.progress, c.status.kind === 'stale' ? 'run' : c.status.kind)
+  o += totalBar(pad + 2, y + 36, inner - 4, 10, c.steps, c.barNow ?? c.progress, c.status.kind === 'stale' ? 'run' : c.status.kind)
   y += 58
   // steps
   c.steps.forEach((s, i) => {

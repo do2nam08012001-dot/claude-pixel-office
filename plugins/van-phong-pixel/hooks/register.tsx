@@ -59,7 +59,7 @@ const dur = (s: number) => (s < 90 ? `${Math.max(1, Math.round(s))} giây` : s <
 const clock = (ms: number) => { const d = new Date(ms); return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}` }
 
 type StepView = Step & { state: 'done' | 'now' | 'wait'; took?: number; elapsed?: number; left?: number | null; guess?: number | null; w: number; work: number }
-type View = { over: boolean; overdue: number; steps: StepView[]; idx: number; allDone: boolean; progress: number; frac: number; scene: any; total: number; remaining: number | null; known: boolean; rnote: string }
+type View = { over: boolean; overdue: number; steps: StepView[]; idx: number; allDone: boolean; progress: number; frac: number; scene: any; total: number; remaining: number | null; known: boolean; rnote: string; barNow: number }
 
 function view(f: Film, now: number): View {
   let steps: Step[], idx: number, allDone: boolean, progress: number, scene: any
@@ -154,7 +154,7 @@ function view(f: Film, now: number): View {
     else overdue = (now - fin) / 1000
   } else if (!allDone && own != null && known) remaining = own
   const rem = overdue ? null : known ? remaining : null
-  let total: number
+  let total: number, barNow = frac   // barNow: how much of the current step's block the total bar fills
   if (!allDone && cur && own != null && rem != null) {
     // % = time worked ÷ (time worked + the time left shown), so the % and "còn … · xong …" always agree; a step that
     // ran far past its estimate with no recorded stop counts its estimate (the card marks it "gồm lúc dừng")
@@ -163,6 +163,7 @@ function view(f: Film, now: number): View {
     cur.work = Math.max(1, spentCur + Math.max(0, rem - guesses))
     const doneW = sv.reduce((a, s) => a + (s.state === 'done' ? s.work : 0), 0)
     total = (doneW + spentCur) / Math.max(1, doneW + spentCur + rem)
+    barNow = spentCur / cur.work   // the bar's blocks then add up to exactly the %
   } else {
     // no honest time left: share of the WORK (each step's usual length)
     for (const s of sv) s.work = s.est ?? avg ?? 60
@@ -171,7 +172,7 @@ function view(f: Film, now: number): View {
   }
   // the HP bar starts at the same share and fills exactly when the step should end
   scene = { ...scene, progress: frac, rate: curLeft && curLeft > 0 ? (1 - frac) / curLeft : 0 }
-  return { over, overdue, steps: sv, idx, allDone, progress, frac, scene, total: allDone ? 1 : Math.min(0.99, total), remaining: rem, known, rnote }
+  return { over, overdue, steps: sv, idx, allDone, progress, frac, barNow, scene, total: allDone ? 1 : Math.min(0.99, total), remaining: rem, known, rnote }
 }
 
 // Pull complete JSON objects out of concatenated text (rclone cat joins files; files may be pretty-printed).
@@ -211,7 +212,7 @@ async function rclone($: any): Promise<string> {
 function summary(list: Film[], now: number) {
   if (!list.length) return 'Chưa có việc nào trong văn phòng.'
   return list.slice(0, 8).map(f => {
-    const v = view(f, now), cur = v.idx >= 0 && v.idx < v.steps.length ? v.steps[v.idx] : null
+    const v = view(f, seenAt(f, now)), cur = v.idx >= 0 && v.idx < v.steps.length ? v.steps[v.idx] : null
     const state = f.blocked ? 'LỖI' : f.approval ? 'CHỜ DUYỆT' : v.allDone ? 'XONG' : isClaudeIdle(f, now) ? `CLAUDE ĐANG DỪNG (${stopWhy(f) || 'hết hạn mức?'})` : 'đang làm'
     const eta = v.allDone ? '' : v.overdue ? ` · quá giờ dự kiến ${dur(v.overdue)}` : v.remaining != null ? ` · còn ~${dur(v.remaining)}` : ''
     return `• ${f.title || f.slug} — ${state} · ${Math.round(v.total * 100)}%${cur ? ` · bước ${v.idx + 1}/${v.steps.length} ${cur.label}` : ''}${eta}${f.message ? ` · ${f.message}` : v.rnote && !v.allDone ? ` · ${v.rnote}` : ''}`
@@ -221,6 +222,8 @@ function summary(list: Film[], now: number) {
 const isClaudeIdle = (f: Film, now: number) => f.source === 'drive' && (!!f.claudeStop || (!!f.claudeAt && now - f.claudeAt > STALE_MS && f.stage !== 'render'))
 const stopWhy = (f: Film) => !f.claudeStop ? '' : f.claudeStop.reason === 'rate_limit' ? `hết hạn mức${f.claudeStop.until ? ' · mở lại lúc ' + clock(f.claudeStop.until) : ''}` : `lỗi ${f.claudeStop.reason}`
 const isDone = (f: Film) => !!f.done || f.step === 'done' || f.stage === 'done'
+// a film silent for 15 min is shown as it was at its last word: % and bar stop instead of counting time nobody confirmed
+const seenAt = (f: Film, now: number) => !isDone(f) && now - f.updated > STALE_MS ? f.updated : now
 
 // ---- taskbar widget (Windows only): taskbar/vp_taskbar.pyw draws the boss room above the taskbar with one % and one
 // finish time. One widget per session, showing that session's films only: on/off lives in
@@ -243,7 +246,7 @@ async function writeLive($: any, dir: string, list: Film[], drive = DEFAULT_DRIV
   const now = Date.now()
   // the same numbers the pane shows: % of the work, finish = now + time left
   const jobs = list.map(f => {
-    const v = view(f, now)
+    const v = view(f, seenAt(f, now))
     return { slug: f.slug, title: f.title || f.slug, step: f.stage ?? f.step, pct: v.allDone ? 100 : Math.round(v.total * 100),
       finishAt: !v.allDone && v.remaining != null ? Math.round(now + v.remaining * 1000) : null,
       state: isDone(f) ? 'done' : f.blocked ? 'err' : f.approval ? 'wait' : isClaudeIdle(f, now) ? 'stop' : 'run', until: f.claudeStop?.until ?? null,
@@ -498,10 +501,6 @@ async function learn($: any, list: Film[]) {
 
 // shortcut: the last 60 scroll/focus moves of the pane go to ~/.claude/van-phong/scroll.log to diagnose the jump to the top; drop once fixed
 let paneOffset = 0, paneSurface = "", scrollLines: string[] = []
-/** where a person's wheel tick lands: never against its own direction from the offset the pane shows now */
-/** the desktop's jump to the top after a press: a person's move with no pointer (not the wheel) landing on row 0 */
-export const isJump = (surface: string, s: any, cur: number) => surface === 'desktop' && s.origin?.kind === 'person' && !s.pointer && s.offset === 0 && s.by < 0 && cur > 0
-export const wheelOffset = (by: number, offset: number, cur: number) => (by > 0 && offset < cur) || (by < 0 && offset > cur) ? Math.max(0, cur + by) : offset
 async function scrollLog($: any, line: string) {
   scrollLines = [...scrollLines, `${new Date().toISOString().slice(11, 19)} ${line}`].slice(-60)
   try { const h = await home($); if (h) await $.fs.write(`${h}/.claude/van-phong/scroll.log`, scrollLines.join('\n') + '\n') } catch { /* no folder */ }
@@ -553,14 +552,14 @@ async function drawOffice($: any, e: any) {
   const pixBtn = (key: string, label: string, onPress: () => any, tone: 'wood' | 'primary' | 'danger' = 'wood') =>
     <Button key={key} label={label} onPress={onPress} variant={tone === 'primary' ? 'primary' : undefined} />
   const card = (f: Film) => {
-    const v = view(f, now), kind = kindOf(f), focused = f.slug === shown?.slug
+    const v = view(f, seenAt(f, now)), kind = kindOf(f), focused = f.slug === shown?.slug
     const group = GROUP_VI[f.group ?? f.skill ?? ''] ?? f.group ?? f.skill ?? ''
     const waitEta = f.source === 'drive' && !finish.get(f.slug) && !v.allDone
     const etaText = v.allDone ? 'đã xong' : kind === 'stale' ? 'im lặng — không ước lượng' : v.overdue ? `quá giờ dự kiến ${dur(v.overdue)} — chờ cloud báo lại` : waitEta ? 'đang chờ Claude ước giờ xong…' : v.over ? 'bước này quá dự kiến — chờ cloud báo %' : v.remaining == null ? 'chưa đủ dữ liệu để ước lượng' : `còn ~${dur(v.remaining)} · xong ~${clock(now + v.remaining * 1000)}`
     const steps: CardStep[] = v.steps.map(s => ({
       label: s.label, role: s.role, state: s.state, w: s.work,
       took: s.took ? dur(s.took) + (s.est && s.took > 3 * s.est && !f.paused ? ' (gồm lúc dừng)' : '') : undefined, elapsed: s.elapsed ? dur(s.elapsed) : undefined,
-      left: s.state === 'now' && !v.progress && s.est && (s.elapsed ?? 0) > s.est ? `quá dự kiến ${dur((s.elapsed ?? 0) - s.est)}` : s.left != null ? `~${dur(s.left)}` : undefined, guess: s.guess != null ? dur(s.guess) : undefined,
+      left: now - f.updated > STALE_MS && !v.allDone ? undefined : s.state === 'now' && !v.progress && s.est && (s.elapsed ?? 0) > s.est ? `quá dự kiến ${dur((s.elapsed ?? 0) - s.est)}` : s.left != null ? `~${dur(s.left)}` : undefined, guess: s.guess != null ? dur(s.guess) : undefined,
     }))
     const stale = kind !== 'stale' ? '' : now - f.updated > STALE_MS ? `Không cập nhật ${dur((now - f.updated) / 1000)}: có thể đã dừng.` : f.claudeStop ? `Claude dừng: ${stopWhy(f)}; việc nền vẫn chạy.` : `Claude không làm gì ${dur((now - (f.claudeAt ?? now)) / 1000)} (có thể hết hạn mức hoặc đang chờ); việc nền vẫn chạy.`
     // running: the cloud's latest note (what it is doing now) and the file it touched last
@@ -570,7 +569,7 @@ async function drawOffice($: any, e: any) {
       || (f.stage === 'render' ? v.rnote : f.activity ? `vừa sửa ${f.activity}` : '')) : ''
     const message = f.blocked || f.approval ? (f.message || (f.blocked ? 'Công việc báo bị vướng.' : 'Công việc chờ bạn trả lời.')) : stale || (live ? `Đang làm: ${live}` : '')
     const reply = f.blocked || f.approval ? (f.source === 'drive' ? 'Trả lời ngay trong phiên gốc này — Claude chuyển sang phiên cloud.' : 'Trả lời trong phiên đang chạy việc này.') : stale && claudeIdle(f) ? 'Khi hạn mức mở lại: nhắn phiên cloud "làm tiếp".' : stale ? 'Hỏi Claude ở phiên gốc kiểm tra phiên cloud.' : live && f.activity ? `Claude vừa: ${f.activity}` : ''
-    const svg = cardSvg({ title: f.title || f.slug, group, status: { t: KIND_T[kind], kind }, total: v.total, etaText, steps, progress: v.frac, message, reply, updatedText: `${dur((now - f.updated) / 1000)} trước`, focused }, W)
+    const svg = cardSvg({ title: f.title || f.slug, group, status: { t: KIND_T[kind], kind }, total: v.total, etaText, steps, progress: v.frac, barNow: v.barNow, message, reply, updatedText: `${dur((now - f.updated) / 1000)} trước`, focused }, W)
     return (
       <Box key={v.allDone ? `job-${f.slug}` : `cur-${f.slug}`} flexDirection="column">
         {Svg ? <Svg source={svg} alt={`${f.title || f.slug}: ${KIND_T[kind]}, tổng ${Math.round(v.total * 100)}%, ${etaText}`} /> : <Text>{f.title || f.slug} · {KIND_T[kind]} · {Math.round(v.total * 100)}% · {etaText}</Text>}
@@ -685,21 +684,19 @@ export const register: Register = on => {
     return drawOffice($, e)
   })
 
-  // after a press the pane holds the keys and the wheel goes through the engine's row scroll, which pulled the pane
-  // back to the top on every tick: a wheel tick never moves against its own direction
   on('ui.scroll', { requestId: PANE }, async ($, e, next) => {
     const s: any = e
-    // the log showed every tick followed by a jump to the top (by = -offset): on the desktop a move with no pointer
-    // (not the wheel) that lands on the top is that jump, and is refused
-    const jump = isJump(paneSurface, s, paneOffset)
-    void scrollLog($, `scroll ${s.origin?.kind ?? '?'}${s.origin?.name ? ':' + s.origin.name : ''} ptr=${s.pointer ? s.pointer.row : '-'} by=${s.by} offset=${s.offset} cur=${paneOffset} rows=${s.bodyRows}/${s.contentRows}${jump ? ' DENIED' : ''}`)
-    if (jump) return { deny: 'not the wheel: the pane keeps its place' } as any
-    const want = s.origin?.kind === 'person' ? wheelOffset(s.by, s.offset, paneOffset) : s.offset
-    const r = await next({ ...s, offset: want })
-    if (!(r as any)?.deny) paneOffset = want
-    return r
+    void scrollLog($, `scroll ${s.origin?.kind ?? '?'} by=${s.by} offset=${s.offset} cur=${paneOffset} rows=${s.bodyRows}/${s.contentRows}`)
+    return next(e)
   })
-  on('ui.focus', { requestId: PANE }, async ($, e, next) => { void scrollLog($, `focus ${(e as any).element ?? '-'} by ${(e as any).origin?.kind}`); return next(e) })
+  // the log: a click left the focus ring on the button, the pane then held the keys, and from then on every wheel tick
+  // went through the engine's row scroll and was thrown back near the top. On the desktop a click no longer takes the
+  // ring (the press itself still runs), so the wheel stays the page's own, as before any press.
+  on('ui.focus', { requestId: PANE }, async ($, e, next) => {
+    const f: any = e, keep = paneSurface === 'desktop' && f.origin?.kind === 'person' && !!f.element
+    void scrollLog($, `focus ${f.element ?? '-'} by ${f.origin?.kind}${keep ? ' KEPT OFF' : ''}`)
+    return keep ? {} : next(e)
+  })
 
   on('ui.close', async ($, e, next) => {
     if ((e as any).id === PANE) await update($, paneOpen, () => false)
@@ -712,7 +709,7 @@ export const register: Register = on => {
     const act = ((await read($, films)) ?? []).filter(f => !isDone(f))
     if (!act.length) return next(e)
     const { Box, Text, Button } = $.ui.resolve(e)
-    const f = act[0], now = Date.now(), v = view(f, now)
+    const f = act[0], now = Date.now(), v = view(f, seenAt(f, now))
     const flag = f.blocked ? 'LỖI · ' : f.approval ? 'CHỜ DUYỆT · ' : isClaudeIdle(f, now) ? `CLAUDE DỪNG${f.claudeStop ? ': ' + stopWhy(f) : ''} · ` : ''
     const eta = v.remaining != null ? ` · còn ~${dur(v.remaining)}` : ''
     const td = (f as any).todo as { current?: string } | undefined
@@ -746,8 +743,14 @@ export const register: Register = on => {
 
   // CLOUD film session: every tool call Claude makes goes to the office live (via Drive), costing no tokens
   on('tool.call', async ($, e, next) => {
-    const r = await next(e)
-    if (cloudRoot) { try { report($, e) } catch { /* never disturb the session */ } }
-    return r
+    if (!cloudRoot) return next(e)
+    // a long command (a pipeline run, a wait on a log) wrote nothing to Drive for an hour and the office called the film
+    // silent: while a call runs, say so every 3 min (this also keeps the heartbeat alive through drive.sh ensure)
+    let tick: any
+    try { liveAct = `Đang chạy: ${describe(e)}`; tick = $.clock.every(180_000, () => { liveDirty = true; void pump($) }) } catch { /* no clock */ }
+    try { return await next(e) } finally {
+      try { tick?.cancel?.() } catch { /* already ended */ }
+      try { report($, e) } catch { /* never disturb the session */ }
+    }
   })
 }
