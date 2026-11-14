@@ -10,6 +10,14 @@ who walks, types and reacts according to the job's real status. Every 30 seconds
   warning when a job has not updated for 15 minutes;
 - an inbox of errors and approvals. "Xem" shows a job in the office, "Làm mới" reads at once, `/vp` reopens the pane.
 
+## Taskbar widget (Windows)
+
+The pane's **▣ Bật widget** button puts the boss room above the taskbar: one progress, one finish time (the pane's own
+numbers), the boss working and walking around. Drag it anywhere (the spot is remembered); click brings Claude to the
+front; right click: hide 30 minutes, back to the corner, turn off. Press the button again (or "Tắt widget") to close it.
+Needs Python from python.org (`pythonw`); nothing else is installed. Files: `~/.claude/van-phong/widget.json` (on/off),
+`~/.claude/van-phong/live/<session>.json` (what each session shows). Art: `node art-source/taskbar-sprites.mjs`.
+
 ## Sources
 
 1. `~/.claude/van-phong/status/*.json` on this computer (write them with `tools/office-status.mjs` from the repository).

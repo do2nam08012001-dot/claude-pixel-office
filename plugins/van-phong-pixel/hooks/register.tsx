@@ -34,6 +34,7 @@ const LEARN = 'learned-v2'
 // cloud film session: repo root (has cloud/drive.sh) when this session runs in the cloud; live reports are throttled
 let cloudRoot = '', liveAct = '', liveTodos = '', liveDirty = false, livePushing = false, liveLast = 0
 const openOthers = atom({ plugin: 'van-phong-pixel', key: 'openOthers' } as const, false)
+const widgetOn = atom({ plugin: 'van-phong-pixel', key: 'widget' } as const, null as boolean | null)   // null: not Windows / not read yet
 let lastScrolled = ''
 // step changes the pane has noticed: slug -> { step, from, to, at }; the hand-off walk plays from the moment it is noticed
 const seen = new Map<string, { step: string; from?: string; to?: string; at: number }>()
@@ -208,6 +209,46 @@ const isClaudeIdle = (f: Film, now: number) => f.source === 'drive' && (!!f.clau
 const stopWhy = (f: Film) => !f.claudeStop ? '' : f.claudeStop.reason === 'rate_limit' ? `hết hạn mức${f.claudeStop.until ? ' · mở lại lúc ' + clock(f.claudeStop.until) : ''}` : `lỗi ${f.claudeStop.reason}`
 const isDone = (f: Film) => !!f.done || f.step === 'done' || f.stage === 'done'
 
+// ---- taskbar widget (Windows only): taskbar/vp_taskbar.pyw draws the boss room above the taskbar with one % and one
+// finish time. On/off lives in ~/.claude/van-phong/widget.json (the pane button and the widget's own "Tắt" both write
+// it); each session writes its films to ~/.claude/van-phong/live/<session>.json while the widget is on.
+const isWin = (h: string) => /^[A-Za-z]:[\\/]/.test(h)
+async function widgetSaysOn($: any, dir: string): Promise<boolean> {
+  try { return JSON.parse(await $.fs.read(`${dir}/widget.json`)).on === true } catch { return false }
+}
+async function launchWidget($: any): Promise<boolean> {
+  // python.org's pythonw first; the Microsoft Store alias in WindowsApps would open the Store, so it is skipped
+  const ps = "$p = @((Get-ChildItem \"$env:LOCALAPPDATA\\Programs\\Python\\Python3*\\pythonw.exe\" -EA 0 | Sort-Object FullName | Select-Object -Last 1).FullName, (Get-Command pyw -EA 0).Source, (Get-Command pythonw -EA 0 | Where-Object { $_.Source -notlike '*WindowsApps*' }).Source) | Where-Object { $_ } | Select-Object -First 1; if (-not $p) { exit 3 }; Start-Process -FilePath $p -ArgumentList ('\"' + $env:VP_PYW + '\"')"
+  try { return (await $.process.run(['powershell', '-NoProfile', '-Command', ps], { timeoutMs: 20000, env: { VP_PYW: `${$.plugin.root}/taskbar/vp_taskbar.pyw` } })).exitCode === 0 } catch { return false }
+}
+async function writeLive($: any, dir: string, list: Film[]) {
+  const on = await widgetSaysOn($, dir)
+  if ((await read($, widgetOn)) !== on) await update($, widgetOn, () => on)
+  if (!on) return
+  const now = Date.now()
+  // the same numbers the pane shows: % of the work, finish = now + time left
+  const jobs = list.map(f => {
+    const v = view(f, now)
+    return { slug: f.slug, title: f.title || f.slug, step: f.stage ?? f.step, pct: v.allDone ? 100 : Math.round(v.total * 100),
+      finishAt: !v.allDone && v.remaining != null ? Math.round(now + v.remaining * 1000) : null,
+      state: isDone(f) ? 'done' : f.blocked ? 'err' : f.approval ? 'wait' : isClaudeIdle(f, now) ? 'stop' : 'run', until: f.claudeStop?.until ?? null }
+  })
+  try { await $.fs.write(`${dir}/live/${(ownKey || 'session').replace(/[^A-Za-z0-9_-]/g, '_')}.json`, JSON.stringify({ updated: now, jobs })) } catch { /* read-only home */ }
+}
+async function toggleWidget($: any) {
+  const h = await home($)
+  if (!isWin(h)) return
+  const dir = `${h}/.claude/van-phong`, on = !(await widgetSaysOn($, dir))
+  await $.fs.write(`${dir}/widget.json`, JSON.stringify({ on }))
+  await update($, widgetOn, () => on)
+  if (!on) return                      // the widget sees the switch within 2 s and closes itself
+  await writeLive($, dir, (await read($, films)) ?? [])
+  if (!(await launchWidget($))) {
+    await $.fs.write(`${dir}/widget.json`, JSON.stringify({ on: false })); await update($, widgetOn, () => false)
+    try { $.ui.toast('Không chạy được widget: máy chưa có Python (python.org) để chạy pythonw') } catch { /* no surface */ }
+  }
+}
+
 async function refresh($: any) {
   if (busy) { again = true; return }   // a slow rclone call must not overlap the next tick (that made the count jump 2 -> 0)
   busy = true
@@ -306,6 +347,7 @@ async function refreshInner($: any) {
   // active jobs first (newest first), finished ones after
   list.sort((a, b) => Number(isDone(a)) - Number(isDone(b)) || b.updated - a.updated)
   await update($, films, () => list)
+  if (dir && isWin(h)) await writeLive($, dir, list)
   await update($, poll, () => ({ at: Date.now(), error: list.length ? '' : errors.join(' · ') }))
   // keep the step being worked on in view: scroll to it when it changes
   const want = (await read($, focus)) ?? ''
@@ -425,6 +467,7 @@ async function drawOffice($: any, e: any) {
   const list = (await read($, films)) ?? []
   const other = (await read($, others)) ?? []
   const showOthers = (await read($, openOthers)) ?? false
+  const wOn = (await read($, widgetOn)) ?? null
   const p = (await read($, poll)) ?? { at: 0, error: '' }
   const want = (await read($, focus)) ?? ''
   const now = Date.now()
@@ -526,6 +569,7 @@ async function drawOffice($: any, e: any) {
       {Svg ? <Svg source={footerSvg(W, p.error ? p.error : p.at ? `cập nhật ${dur((now - p.at) / 1000)} trước · làm mới mỗi 5 giây` : 'đang đọc trạng thái…', !!p.error)} alt={p.error || 'Văn phòng đang cập nhật trực tiếp'} /> : <Text dimColor>{p.error || 'Đang cập nhật'}</Text>}
       <Box flexDirection="row" justifyContent="flex-end">
         <Box flexDirection="row" gap={1}>
+          {wOn !== null ? pixBtn('widget', wOn ? '▣ Tắt widget' : '▣ Bật widget', () => toggleWidget($), wOn ? 'primary' : 'wood') : null}
           {pixBtn("lam-moi", "⟳ Làm mới", () => { ticks = 0; driveError = ''; return refresh($) }, 'wood')}
         </Box>
       </Box>
@@ -542,6 +586,8 @@ export const register: Register = on => {
       const saved = (await $.store.get(ownKey)) as Owned[] | undefined
       if (saved?.length) await update($, owned, (o: Owned[]) => [...(o ?? []), ...saved.filter(s => !(o ?? []).some(x => x.slug === s.slug))]); void keep($)
     } catch { /* first start */ }
+    // the widget was left on: bring it back with the session (one instance only, the widget checks)
+    void (async () => { const h = await home($); if (isWin(h) && await widgetSaysOn($, `${h}/.claude/van-phong`)) await launchWidget($) })().catch(() => {})
     cwdSkill = /explainer/.test(cwd) ? 'jp-explainer-video' : /history-video/.test(cwd) ? 'jp-history-video' : undefined
     // a cloud session of a video repo reports Claude's work live (the PC's office reads it from Drive)
     if (cwd && cwdSkill) {

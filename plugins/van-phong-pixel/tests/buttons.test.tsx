@@ -201,3 +201,37 @@ test('/vp: render with no numbers says so; the final encode shows under Render',
   expect(text).toMatch(/Tamiya C[^\n]*bước 4\/6 Render[^\n]*Nén video cuối lượt 2\/2 · 60%/)   // not QA yet: the encode is part of Render
   await ui.unmount()
 })
+
+test('Windows: the widget button turns the taskbar widget on (writes the switch, live file, starts pythonw) and off', async ($, on) => {
+  const calls: string[][] = [], files = new Map<string, string>(), norm = (p: string) => String(p).split(String.fromCharCode(92)).join('/')
+  on('command.register', () => ({ value: { command: 'vp' } }))
+  on('ui.open', () => ({ value: { isPlaced: true } }))
+  on('ui.scroll', () => ({ value: {} }))
+  on('ui.toast', () => ({ value: {} }))
+  on('session.start', (_: any, e: any) => ({ cwd: e.cwd }))
+  on('store.get', (_: any, e: any) => ({ value: e.key === 'rclone' ? 'rclone' : e.key === 'home' ? 'C:/Users/t' : undefined }))
+  on('store.set', () => ({ value: undefined }))
+  on('fs.read', (_: any, e: any) => { const p = norm(e.path); if (files.has(p)) return { value: files.get(p) }; throw new Error('ENOENT') })
+  on('fs.write', (_: any, e: any) => { files.set(norm(e.path), e.text); return { value: undefined } })
+  on('fs.list', () => { throw new Error('ENOENT') })
+  on('process.run', (_: any, e: any) => {
+    const argv = (e.argv ?? []) as string[]; calls.push(argv)
+    if (argv[1] === 'lsf') return { value: { exitCode: 0, stdout: 'jp-history-video/', stderr: '' } }
+    if (argv[1] === 'cat') return { value: { exitCode: 0, stdout: JSON.stringify(sony), stderr: '' } }
+    return { value: { exitCode: 0, stdout: '', stderr: '' } }
+  })
+  on('tool.call', () => ({ result: {} }))
+  await $.session.start({ cwd: 'D:/x/repo-jp-explainer-video', surface: 'desktop', isInteractive: true })
+  await $.tool.call({ tool: 'Bash', command: 'bash local/send.sh sony --title "Sony" --script a.txt' })
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  expect(await ui.find({ type: 'Button', key: 'widget' })).toBeTruthy()
+  await ui.press({ key: 'widget' })
+  const sw = 'C:/Users/t/.claude/van-phong/widget.json'
+  expect(JSON.parse(files.get(sw)!).on).toBe(true)
+  expect(calls.some(a => a[0] === 'powershell' && a.join(' ').includes('Start-Process'))).toBe(true)
+  const live = [...files.entries()].find(([k]) => k.includes('/.claude/van-phong/live/'))
+  expect(live && JSON.parse(live[1]).jobs[0].slug).toBe('sony')
+  await ui.press({ key: 'widget' })
+  expect(JSON.parse(files.get(sw)!).on).toBe(false)
+  await ui.unmount()
+})
