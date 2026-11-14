@@ -500,7 +500,7 @@ async function learn($: any, list: Film[]) {
 }
 
 // shortcut: the last 60 scroll/focus moves of the pane go to ~/.claude/van-phong/scroll.log to diagnose the jump to the top; drop once fixed
-let paneOffset = 0, paneSurface = "", scrollLines: string[] = []
+let paneOffset = 0, scrollLines: string[] = []
 async function scrollLog($: any, line: string) {
   scrollLines = [...scrollLines, `${new Date().toISOString().slice(11, 19)} ${line}`].slice(-60)
   try { const h = await home($); if (h) await $.fs.write(`${h}/.claude/van-phong/scroll.log`, scrollLines.join('\n') + '\n') } catch { /* no folder */ }
@@ -565,11 +565,13 @@ async function drawOffice($: any, e: any) {
     // running: the cloud's latest note (what it is doing now) and the file it touched last
     const td = (f as any).todo as { done: number; total: number; current: string } | undefined
     // what the cloud is doing: its todo item, else its note, else the render % or the last file it touched
-    const live = kind === 'run' && !v.allDone ? (td?.current ? `${td.current} (${td.done}/${td.total})` : f.message
+    // the cloud's pipeline gate stopped and Claude is fixing it (not an error for the user): shown first, in yellow
+    const fixing = kind === 'run' && /^Claude đang sửa:/.test(f.message ?? '')
+    const live = kind === 'run' && !v.allDone ? (fixing ? f.message!.replace(/^Claude đang sửa:\s*/, 'sửa ') : td?.current ? `${td.current} (${td.done}/${td.total})` : f.message
       || (f.stage === 'render' ? v.rnote : f.activity ? `vừa sửa ${f.activity}` : '')) : ''
     const message = f.blocked || f.approval ? (f.message || (f.blocked ? 'Công việc báo bị vướng.' : 'Công việc chờ bạn trả lời.')) : stale || (live ? `Đang làm: ${live}` : '')
     const reply = f.blocked || f.approval ? (f.source === 'drive' ? 'Trả lời ngay trong phiên gốc này — Claude chuyển sang phiên cloud.' : 'Trả lời trong phiên đang chạy việc này.') : stale && claudeIdle(f) ? 'Khi hạn mức mở lại: nhắn phiên cloud "làm tiếp".' : stale ? 'Hỏi Claude ở phiên gốc kiểm tra phiên cloud.' : live && f.activity ? `Claude vừa: ${f.activity}` : ''
-    const svg = cardSvg({ title: f.title || f.slug, group, status: { t: KIND_T[kind], kind }, total: v.total, etaText, steps, progress: v.frac, barNow: v.barNow, message, reply, updatedText: `${dur((now - f.updated) / 1000)} trước`, focused }, W)
+    const svg = cardSvg({ title: f.title || f.slug, group, status: fixing ? { t: "Đang sửa", kind: "wait" } : { t: KIND_T[kind], kind }, total: v.total, etaText, steps, progress: v.frac, barNow: v.barNow, message, reply, updatedText: `${dur((now - f.updated) / 1000)} trước`, focused }, W)
     return (
       <Box key={v.allDone ? `job-${f.slug}` : `cur-${f.slug}`} flexDirection="column">
         {Svg ? <Svg source={svg} alt={`${f.title || f.slug}: ${KIND_T[kind]}, tổng ${Math.round(v.total * 100)}%, ${etaText}`} /> : <Text>{f.title || f.slug} · {KIND_T[kind]} · {Math.round(v.total * 100)}% · {etaText}</Text>}
@@ -680,7 +682,6 @@ export const register: Register = on => {
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const o = (e.props as any)?.scroll?.offset
     if (typeof o === 'number') paneOffset = o
-    paneSurface = String((e as any).surface ?? '')
     return drawOffice($, e)
   })
 
@@ -689,14 +690,9 @@ export const register: Register = on => {
     void scrollLog($, `scroll ${s.origin?.kind ?? '?'} by=${s.by} offset=${s.offset} cur=${paneOffset} rows=${s.bodyRows}/${s.contentRows}`)
     return next(e)
   })
-  // the log: a click left the focus ring on the button, the pane then held the keys, and from then on every wheel tick
-  // went through the engine's row scroll and was thrown back near the top. On the desktop a click no longer takes the
-  // ring (the press itself still runs), so the wheel stays the page's own, as before any press.
-  on('ui.focus', { requestId: PANE }, async ($, e, next) => {
-    const f: any = e, keep = paneSurface === 'desktop' && f.origin?.kind === 'person' && !!f.element
-    void scrollLog($, `focus ${f.element ?? '-'} by ${f.origin?.kind}${keep ? ' KEPT OFF' : ''}`)
-    return keep ? {} : next(e)
-  })
+  // the desktop app resets the pane to the top on every redraw after a Button press (reported upstream); nothing the
+  // plugin does changes it, so the log stays as evidence only
+  on('ui.focus', { requestId: PANE }, async ($, e, next) => { void scrollLog($, `focus ${(e as any).element ?? '-'} by ${(e as any).origin?.kind}`); return next(e) })
 
   on('ui.close', async ($, e, next) => {
     if ((e as any).id === PANE) await update($, paneOpen, () => false)

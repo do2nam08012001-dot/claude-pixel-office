@@ -279,3 +279,18 @@ test('cloud: back from a long error, Claude is asked for a new finish time', asy
   await bash('bash cloud/drive.sh mark resume')
   expect(prompts.length).toBe(1)                       // once per recovery
 })
+
+// the cloud's pipeline gate stopped (STOP / rc≠0): Claude is fixing it, not an error for the user
+test('/vp: "Claude đang sửa" is a running film, not an error', async ($, on) => {
+  const t = Date.now()
+  const f = { slug: 'fix', skill: 'jp-history-video', title: 'Đang sửa', stage: 'render', render: 0.4, message: 'Claude đang sửa: bước render rc=1', todo: { done: 2, total: 5, current: 'Chạy lại render' }, updated: t, history: { render: { start: t - 600_000 } } }
+  engine(on, [], JSON.stringify(f))
+  await $.session.start({ cwd: 'D:/x/repo-jp-history-video', surface: 'desktop', isInteractive: true })
+  await $.tool.call({ tool: 'Bash', command: 'bash local/send.sh fix --title "fix"' })
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  await ui.press({ key: 'lam-moi' })
+  const { text } = await $.command.run({ command: 'vp' })
+  expect(text).toMatch(/Đang sửa — đang làm[^\n]*Claude đang sửa: bước render rc=1/)
+  expect(await ui.find({ type: 'Button', key: 'sua-fix' })).toBeFalsy()   // no "reply to the error" button
+  await ui.unmount()
+})
