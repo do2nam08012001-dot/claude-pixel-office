@@ -24,6 +24,8 @@ export type Film = {
   /** last file the job touched (heartbeat) */
   activity?: string
   beat?: number
+  /** last time Claude itself made a tool call in the cloud session */
+  claudeAt?: number
   /** seconds left in the current step */
   eta?: number | null
   blocked?: boolean

@@ -47,9 +47,9 @@ let shownSvg = '', overlaySvg = '', swapping = false
 
 // Legacy video pipeline (v1 status files of the jp video repos); est = rough seconds per stage
 const VIDEO_STEPS: Step[] = [
-  { id: 'inputs', label: 'Nhận đầu vào', role: 'fetch', est: 120 }, { id: 'research', label: 'Nghiên cứu', role: 'research', est: 1200 },
-  { id: 'plan', label: 'Kế hoạch', role: 'plan', est: 900 }, { id: 'render', label: 'Render', role: 'build', est: 1800 },
-  { id: 'qa', label: 'QA', role: 'check', est: 300 }, { id: 'deliver', label: 'Giao phim', role: 'deliver', est: 180 },
+  { id: 'inputs', label: 'Nhận đầu vào', role: 'fetch', est: 120 }, { id: 'research', label: 'Nghiên cứu', role: 'research', est: 1800 },
+  { id: 'plan', label: 'Kế hoạch', role: 'plan', est: 5400 }, { id: 'render', label: 'Render', role: 'build', est: 14400 },
+  { id: 'qa', label: 'QA', role: 'check', est: 900 }, { id: 'deliver', label: 'Giao phim', role: 'deliver', est: 300 },
 ]
 const ROLES: Role[] = ['fetch', 'research', 'plan', 'build', 'check', 'deliver']
 const GROUP_VI: Record<string, string> = { 'jp-history-video': 'video lịch sử', 'jp-explainer-video': 'video explainer' }
@@ -191,11 +191,13 @@ function summary(list: Film[], now: number) {
   if (!list.length) return 'Chưa có việc nào trong văn phòng.'
   return list.slice(0, 8).map(f => {
     const v = view(f, now), cur = v.idx >= 0 && v.idx < v.steps.length ? v.steps[v.idx] : null
-    const state = f.blocked ? 'LỖI' : f.approval ? 'CHỜ DUYỆT' : v.allDone ? 'XONG' : 'đang làm'
+    const state = f.blocked ? 'LỖI' : f.approval ? 'CHỜ DUYỆT' : v.allDone ? 'XONG' : isClaudeIdle(f, now) ? 'CLAUDE ĐANG DỪNG (hết hạn mức?)' : 'đang làm'
     const eta = v.allDone ? '' : v.overdue ? ` · quá giờ dự kiến ${dur(v.overdue)}` : v.remaining != null ? ` · còn ~${dur(v.remaining)}` : ''
     return `• ${f.title || f.slug} — ${state} · ${Math.round(v.total * 100)}%${cur ? ` · bước ${v.idx + 1}/${v.steps.length} ${cur.label}` : ''}${eta}${f.message ? ` · ${f.message}` : ''}`
   }).join('\n')
 }
+// Claude itself idle (usage limit, waiting) while background work still beats; a render runs on its own, so it does not count there
+const isClaudeIdle = (f: Film, now: number) => f.source === 'drive' && !!f.claudeAt && now - f.claudeAt > STALE_MS && f.stage !== 'render'
 const isDone = (f: Film) => !!f.done || f.step === 'done' || f.stage === 'done'
 
 async function refresh($: any) {
@@ -441,7 +443,8 @@ async function drawOffice($: any, e: any) {
       $.clock.after(1600, async () => { overlaySvg = ''; swapping = false; await redraw() }) })
   }
 
-  const kindOf = (f: Film) => (f.blocked ? 'err' : f.approval ? 'wait' : isDone(f) ? 'done' : now - f.updated > STALE_MS ? 'stale' : 'run') as 'err' | 'wait' | 'done' | 'stale' | 'run'
+  const claudeIdle = (f: Film) => isClaudeIdle(f, now)
+  const kindOf = (f: Film) => (f.blocked ? 'err' : f.approval ? 'wait' : isDone(f) ? 'done' : now - f.updated > STALE_MS || claudeIdle(f) ? 'stale' : 'run') as 'err' | 'wait' | 'done' | 'stale' | 'run'
   const KIND_T = { err: 'Lỗi', wait: 'Chờ duyệt', done: 'Xong', stale: 'Im lặng', run: 'Đang làm' }
   const W = Math.max(240, px)
   // a pixel button: the face is drawn, a plain Button on top keeps it a real control (keyboard, presses, tests)
@@ -458,14 +461,14 @@ async function drawOffice($: any, e: any) {
       took: s.took ? dur(s.took) : undefined, elapsed: s.elapsed ? dur(s.elapsed) : undefined,
       left: s.state === 'now' && !v.progress && s.est && (s.elapsed ?? 0) > s.est ? `quá dự kiến ${dur((s.elapsed ?? 0) - s.est)}` : s.left != null ? `~${dur(s.left)}` : undefined, guess: s.guess != null ? dur(s.guess) : undefined,
     }))
-    const stale = kind === 'stale' ? `Không cập nhật ${dur((now - f.updated) / 1000)}: có thể đã dừng.` : ''
+    const stale = kind !== 'stale' ? '' : now - f.updated > STALE_MS ? `Không cập nhật ${dur((now - f.updated) / 1000)}: có thể đã dừng.` : `Claude không làm gì ${dur((now - (f.claudeAt ?? now)) / 1000)} (hết hạn mức hoặc đang chờ); việc nền vẫn chạy.`
     // running: the cloud's latest note (what it is doing now) and the file it touched last
     const td = (f as any).todo as { done: number; total: number; current: string } | undefined
     // what the cloud is doing: its todo item, else its note, else the render % or the last file it touched
     const live = kind === 'run' && !v.allDone ? (td?.current ? `${td.current} (${td.done}/${td.total})` : f.message
       || (f.stage === 'render' ? `Render ${Math.round((f.render ?? 0) * 100)}%` : f.activity ? `vừa sửa ${f.activity}` : '')) : ''
     const message = f.blocked || f.approval ? (f.message || (f.blocked ? 'Công việc báo bị vướng.' : 'Công việc chờ bạn trả lời.')) : stale || (live ? `Đang làm: ${live}` : '')
-    const reply = f.blocked || f.approval ? (f.source === 'drive' ? 'Trả lời ngay trong phiên gốc này — Claude chuyển sang phiên cloud.' : 'Trả lời trong phiên đang chạy việc này.') : stale ? 'Hỏi Claude ở phiên gốc kiểm tra phiên cloud.' : live && f.activity ? `Claude vừa: ${f.activity}` : ''
+    const reply = f.blocked || f.approval ? (f.source === 'drive' ? 'Trả lời ngay trong phiên gốc này — Claude chuyển sang phiên cloud.' : 'Trả lời trong phiên đang chạy việc này.') : stale && claudeIdle(f) ? 'Khi hạn mức mở lại: nhắn phiên cloud "làm tiếp".' : stale ? 'Hỏi Claude ở phiên gốc kiểm tra phiên cloud.' : live && f.activity ? `Claude vừa: ${f.activity}` : ''
     const svg = cardSvg({ title: f.title || f.slug, group, status: { t: KIND_T[kind], kind }, total: v.total, etaText, steps, progress: v.frac, message, reply, updatedText: `${dur((now - f.updated) / 1000)} trước`, focused }, W)
     return (
       <Box key={v.allDone ? `job-${f.slug}` : `cur-${f.slug}`} flexDirection="column">
@@ -579,7 +582,7 @@ export const register: Register = on => {
     if (!act.length) return next(e)
     const { Box, Text, Button } = $.ui.resolve(e)
     const f = act[0], now = Date.now(), v = view(f, now)
-    const flag = f.blocked ? 'LỖI · ' : f.approval ? 'CHỜ DUYỆT · ' : ''
+    const flag = f.blocked ? 'LỖI · ' : f.approval ? 'CHỜ DUYỆT · ' : isClaudeIdle(f, now) ? 'CLAUDE ĐANG DỪNG · ' : ''
     const eta = v.remaining != null ? ` · còn ~${dur(v.remaining)}` : ''
     const td = (f as any).todo as { current?: string } | undefined
     const doing = td?.current || f.message || ''

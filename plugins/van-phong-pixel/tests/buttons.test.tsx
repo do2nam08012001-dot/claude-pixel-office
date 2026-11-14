@@ -106,3 +106,17 @@ test('/vp: overdue, waiting for Claude, render done = QA', async ($, on) => {
   expect(text).toMatch(/Render xong[^\n]*bước 5\/6 QA/)
   await ui.unmount()
 })
+
+// Claude out of tokens while the cloud keeps beating: the card says so instead of "Đang làm"
+test('/vp: Claude idle (usage limit) is shown even while files keep moving', async ($, on) => {
+  const t = Date.now()
+  const f = { slug: 'idle', skill: 'jp-history-video', title: 'Hết hạn mức', stage: 'plan', claudeAt: t - 40 * 60_000, updated: t, finishAt: t + 3600_000, history: { plan: { start: t - 7200_000 } } }
+  engine(on, [], JSON.stringify(f))
+  await $.session.start({ cwd: 'D:/x/repo-jp-history-video', surface: 'desktop', isInteractive: true })
+  await $.tool.call({ tool: 'Bash', command: 'bash local/send.sh idle --title "idle"' })
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  await ui.press({ key: 'lam-moi' })
+  const { text } = await $.command.run({ command: 'vp' })
+  expect(text).toMatch(/Hết hạn mức — CLAUDE ĐANG DỪNG/)
+  await ui.unmount()
+})
