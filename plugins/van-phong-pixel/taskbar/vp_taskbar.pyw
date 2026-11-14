@@ -122,6 +122,7 @@ def fetch(key, rclone, folder, slugs):
 held = {}                                         # slug -> {'step', 'pct'}: the % shown while that step had no real number
 DEF_EST = {'inputs': 120, 'research': 1800, 'plan': 5400, 'render': 14400, 'qa': 900, 'deliver': 300}   # timeline.ts VIDEO_STEPS
 STALE_MS = 15 * 60_000
+TIMELINE_VERSION = 1                              # = hooks/timeline.ts TIMELINE_VERSION; the case table carries it too
 MAP = {'idle': -1, 'inputs': 0, 'research': 1, 'plan': 2, 'render': 3, 'qa': 4, 'deliver': 5, 'done': 6}
 
 def timeline(f, steps, now0, hold=None):
@@ -224,6 +225,8 @@ def selftest():
     """run taskbar/timeline-cases.mjs (the pane's own case table) through timeline(): exact %, time left and step"""
     text = open(os.path.join(HERE, 'timeline-cases.mjs'), encoding='utf-8').read()
     book = json.loads(text[text.index('{'):text.rindex('}') + 1]); now = book['now']; bad = 0
+    if book.get('version') != TIMELINE_VERSION:
+        print(f"FAIL time line version: table {book.get('version')}, widget {TIMELINE_VERSION} - port hooks/timeline.ts again"); return 1
     def absol(f):
         f = json.loads(json.dumps(f))
         for k in ('updated', 'finishAt', 'claudeAt', 'beat'):
