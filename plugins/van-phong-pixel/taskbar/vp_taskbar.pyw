@@ -18,6 +18,8 @@ DEMO = sys.argv[1] if len(sys.argv) > 1 and not SESS and not SELFTEST else ''
 SUF = '-' + SESS if SESS else ''
 LIVE, SWITCH = os.path.join(HOME, 'live'), os.path.join(HOME, f'widget{SUF}.json')
 POSF = os.path.join(HOME, f'taskbar{SUF}.json')
+SIZEF = os.path.join(HOME, f'taskbar-size{SUF}.json')   # Bé / Vừa / Lớn from the right-click menu
+SIZES = {'Bé': (2, 3), 'Vừa': (1, 1), 'Lớn': (3, 2)}    # zoom / subsample of the screen scale
 KEY = '#FF00FE'                      # transparent colour of the window
 WOOD, EDGE, HI, INK, GOLD = '#7A4A2E', '#2A1E1E', '#9C6440', '#FFF3D6', '#F3D98B'
 LED = {'run': '#5FD068', 'wait': '#F2B84B', 'stop': '#F2B84B', 'err': '#E5534B', 'done': '#5FD068', 'stale': '#8A8A8A', 'idle': '#6B7A99'}
@@ -56,10 +58,18 @@ F, HD, FT = 5, 38, 16                                           # frame width, n
 W, H = RW + 2 * F, F + HD + RH + FT + F
 OFF = [0, 0]                                                    # drawing origin of the part being drawn
 root = tk.Tk(); root.withdraw()
-Z = max(1, round(root.winfo_fpixels('1i') / 96))               # 1 at 100-149 %, 2 at 150 %+
+BASE = max(1, round(root.winfo_fpixels('1i') / 96))            # 1 at 100-149 %, 2 at 150 %+
+try: SIZE = json.load(open(SIZEF, encoding='utf-8'))['size']; SIZES[SIZE]
+except Exception: SIZE = 'Vừa'
+def scale(): return BASE * SIZES[SIZE][0] / SIZES[SIZE][1]
+Z = scale()
 root.overrideredirect(True); root.attributes('-topmost', True); root.attributes('-transparentcolor', KEY); root.config(bg=KEY)
-cv = tk.Canvas(root, bg=KEY, highlightthickness=0, bd=0, width=W * Z, height=H * Z, cursor='hand2'); cv.pack()
+cv = tk.Canvas(root, bg=KEY, highlightthickness=0, bd=0, width=round(W * Z), height=round(H * Z), cursor='hand2'); cv.pack()
 BIG, MID, LAB, FOOT = ('Consolas', -22 * Z, 'bold'), ('Consolas', -15 * Z, 'bold'), ('Segoe UI', -10 * Z), ('Segoe UI', -11 * Z, 'bold')
+
+def zoomed(im):
+    n, d = BASE * SIZES[SIZE][0], SIZES[SIZE][1]
+    return im if n == d == 1 else im.zoom(n).subsample(d) if d > 1 else im.zoom(n)
 
 def cells(r):
     """a sprite row as palette indexes, -1 = transparent (characters: a string of ABC digits; the room: a list)"""
@@ -73,7 +83,7 @@ def pix(key, rows, pal):
         for y, r in enumerate(rows):   # real transparency, so what is under shows through (KEY would punch a hole to the desktop)
             for x, i in enumerate(cells(r)):
                 if i < 0: im.transparency_set(x, y, True)
-        _img[key] = im.zoom(Z) if Z > 1 else im
+        _img[key] = zoomed(im)
     return _img[key]
 
 def boss(frame):
@@ -83,7 +93,7 @@ def R(x, y, w, h, col):
     x += OFF[0]; y += OFF[1]; cv.create_rectangle(x * Z, y * Z, (x + w) * Z, (y + h) * Z, fill=col, outline='', tags=TAG[0])
 def img(x, y, im): cv.create_image((x + OFF[0]) * Z, (y + OFF[1]) * Z, image=im, anchor='nw', tags=TAG[0])
 def text(x, y, s, font, col, anchor='w'):
-    x += OFF[0]; y += OFF[1]
+    x += OFF[0]; y += OFF[1]; font = (font[0], round(font[1]), *font[2:])   # Tk wants whole font sizes
     cv.create_text(x * Z + Z, y * Z + Z, text=s, anchor=anchor, fill=EDGE, font=font, tags=TAG[0])   # 1-pixel drop shadow, readable on wood
     cv.create_text(x * Z, y * Z, text=s, anchor=anchor, fill=col, font=font, tags=TAG[0])
 
@@ -381,7 +391,7 @@ def lit(layer, night, pulse):
     for y, r in enumerate(out):
         for x, c in enumerate(r):
             if c is None: im.transparency_set(x, y, True)
-    _img[key] = im.zoom(Z) if Z > 1 else im
+    _img[key] = zoomed(im)
     return _img[key]
 
 # ---- where the boss goes on a break (sprite top-left; desk front row y 116, so he never crosses the globe or chair)
@@ -534,7 +544,7 @@ gains, quarter, prev_pct = [], [-9.0], [None]   # "+N%" floats, when a quarter w
 def draw():
     now = time.time() * 1000
     # nothing running: away, except for the first minute after it is turned on (so the button visibly does something)
-    if now < hidden_until or (not jobs and time.time() - started > 60): root.withdraw()
+    if now < hidden_until: root.withdraw()   # only "Ẩn 30 phút" hides it; on/off is the user's (pane button / Tắt widget)
     else:
         s = time.time(); pct, st, line, doing = summary(now)
         if pct is not None and prev_pct[0] is not None and pct > prev_pct[0]:
@@ -554,7 +564,7 @@ def place():
     # shortcut: a new session's widget starts at one of 4 spots picked by its name, so two may still meet; drag one away
     except Exception: x, y = Rr - W * Z - 12 - (sum(map(ord, SESS)) % 4) * (W * Z + 8), B - H * Z
     x = max(L, min(Rr - W * Z, x)); y = max(T, min(B - H * Z, y))   # keep it on screen after a resolution change
-    root.geometry(f'+{x}+{y}')
+    root.geometry(f'+{round(x)}+{round(y)}')
 
 def open_session():
     # shortcut: the desktop app's claude:// link brings Claude to the front, not a given session (no session link is known)
@@ -575,11 +585,22 @@ def hide(minutes):
     global hidden_until
     hidden_until = time.time() * 1000 + minutes * 60_000
 
+def resize(name):
+    global SIZE, Z, BIG, MID, LAB, FOOT
+    SIZE = name; Z = scale(); _img.clear(); last[0] = None
+    BIG, MID, LAB, FOOT = ('Consolas', -22 * Z, 'bold'), ('Consolas', -15 * Z, 'bold'), ('Segoe UI', -10 * Z), ('Segoe UI', -11 * Z, 'bold')
+    cv.config(width=round(W * Z), height=round(H * Z)); place()
+    try: os.makedirs(HOME, exist_ok=True); json.dump({'size': name}, open(SIZEF, 'w', encoding='utf-8'))
+    except OSError: pass
+
 def menu(ev):
     m = tk.Menu(root, tearoff=0)
     m.add_command(label='Mở Claude', command=open_session)
     m.add_command(label='Ẩn 30 phút', command=lambda: hide(30))
     m.add_command(label='Về góc phải', command=lambda: (os.path.exists(POSF) and os.remove(POSF), place()))
+    sz = tk.Menu(m, tearoff=0); cur = tk.StringVar(m, SIZE)
+    for name in SIZES: sz.add_radiobutton(label=name, value=name, variable=cur, command=lambda n=name: resize(n))
+    m.add_cascade(label='Cỡ', menu=sz)
     m.add_separator(); m.add_command(label='Tắt widget', command=turn_off)
     m.tk_popup(ev.x_root, ev.y_root)
 
