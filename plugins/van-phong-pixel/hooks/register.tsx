@@ -48,7 +48,9 @@ let sceneKey = '', sceneSvg = ''
 // double buffer: the old scene stays on top (overlay) while the new one loads underneath, then the overlay goes
 let shownSvg = '', overlaySvg = '', swapping = false
 
-const GROUP_VI: Record<string, string> = { 'jp-history-video': 'video lịch sử', 'jp-explainer-video': 'video explainer' }
+const GROUP_VI: Record<string, string> = { 'jp-history-video': 'video lịch sử', 'jp-explainer-video': 'video explainer', 'jp-process-video': 'video quy trình' }
+// which video skill a repo folder / send.sh command belongs to (repo-jp-<kind>-video, or the PC folder jp-quytrinh-video*)
+const skillOf = (s: string): string | undefined => /explainer/.test(s) ? 'jp-explainer-video' : /history-video/.test(s) ? 'jp-history-video' : /process-video|quytrinh/.test(s) ? 'jp-process-video' : undefined
 const dur = (s: number) => (s < 90 ? `${Math.max(1, Math.round(s))} giây` : s < 90 * 60 ? `${Math.round(s / 60)} phút` : `${Math.floor(Math.round(s / 60) / 60)} giờ ${Math.round(s / 60) % 60} phút`)
 // how long ago, never more than it really was: under a minute, then whole minutes (a card is not redrawn every second for it)
 const ago = (s: number) => (s < 60 ? 'dưới 1 phút' : s < 90 * 60 ? `${Math.floor(s / 60)} phút` : dur(s))
@@ -316,7 +318,7 @@ const TITLE_RE = /--title\s+(?:"([^"]*)"|'([^']*)')/
 async function claim($: any, command: string) {
   const m = SEND.exec(command) ?? INIT.exec(command)
   if (!m) return
-  const tm = TITLE_RE.exec(command), skill = /explainer/.test(command) ? 'jp-explainer-video' : /history-video/.test(command) ? 'jp-history-video' : cwdSkill
+  const tm = TITLE_RE.exec(command), at = command.indexOf('send.sh'), skill = skillOf(at >= 0 ? command.slice(0, at) : command) ?? cwdSkill   // the repo of send.sh, not the input file paths
   await update($, owned, (o: Owned[]) => (o ?? []).some(x => x.slug === m[1]) ? o : [...(o ?? []), { slug: m[1], title: tm ? tm[1] ?? tm[2] : m[1], skill, at: Date.now() }]); void keep($)
   await update($, focus, () => m[1]); lastScrolled = ''
   void refresh($)
@@ -554,7 +556,7 @@ export const register: Register = on => {
       } catch { /* no folder */ }
       if (await widgetSaysOn($, dir)) await launchWidget($)
     })().catch(() => {})
-    cwdSkill = /explainer/.test(cwd) ? 'jp-explainer-video' : /history-video/.test(cwd) ? 'jp-history-video' : undefined
+    cwdSkill = skillOf(cwd)
     // a cloud session of a video repo reports Claude's work live (the PC's office reads it from Drive)
     if (cwd && cwdSkill) {
       etaAsks = 0   // a new cloud session = a new film
