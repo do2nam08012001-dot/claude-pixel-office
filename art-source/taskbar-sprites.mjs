@@ -47,8 +47,9 @@ for (const [who, frames] of Object.entries(A.chars)) {
 // Status bubbles (b_ok/b_wait/b_err) come along for the effects.
 {
   const X = 352, Y = 70, DW = 160, DH = 170;
-  const ABC = '0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ!#$%&()*+,-/:;<=>?@[]^_{|}~', pal = [];
-  const enc = (g) => g.map(r => r.map(c => { if (!c) return '.'; let i = pal.indexOf(c); if (i < 0) { i = pal.length; pal.push(c); } return ABC[i]; }).join(''));
+  const pal = [];
+  // the room has well over 89 colours (the books): its rows are palette indexes, -1 = transparent
+  const enc = (g) => g.map(r => r.map(c => { if (!c) return -1; let i = pal.indexOf(c); if (i < 0) { i = pal.length; pal.push(c); } return i; }));
   const blank = (w, h) => Array.from({ length: h }, () => Array(w).fill(null));
   const comp = (X, Y, DW, DH) => {   // patterns + bg of an area of the office
     const g = blank(DW, DH);
@@ -65,14 +66,33 @@ for (const [who, frames] of Object.entries(A.chars)) {
   // a shorter desk (x 36..119 instead of ..143): the boss walks round its right end without passing through it.
   // Columns 96..119 of the desk (plain drawer front) go; everything right of them moves 24 px left.
   for (const r of fg) { r.splice(96, 24); r.push(...Array(24).fill(null)) }
+  // the big plant moves back into the corner: lift its pixels out (whatever is not floor, counter or rug), mend the rug
+  // corner it stood on from the rug's mirror image (the rug is symmetric about x = 81.5), and put it back 14 rows higher
+  // (below, after the shelves, so it stands in front of them)
+  const PLANT = []
+  { const ground = new Set()
+    for (let y = 8; y < 61; y++) for (let x = 0; x < 16; x++) ground.add(bg[y][x])
+    for (let y = 40; y < 61; y++) for (let x = 16; x < 56; x++) ground.add(bg[y][x])
+    for (let y = 8; y < 61; y++) for (let x = 124; x < DW; x++) if (!ground.has(bg[y][x])) PLANT.push([x, y, bg[y][x]])
+    for (let y = 42; y < 61; y++) for (let x = 124; x < DW; x++) bg[y][x] = bg[y][163 - x] }
+  // a library wall behind the boss: three of the pane's bookshelves side by side along the back wall, standing on the
+  // floor line just behind the rug (only their lower shelves show under the room's top edge, as in the pane); the
+  // boss's chair stands in front of them, so its pixels are kept
+  { const CHAIR = new Set(['#4a2018', '#2a0f0a', '#8a4030', '#6b2e22', '#c08a4a'])
+    // a touch quieter so the shelves sit back behind the boss: a quarter less colour, 15 % toward dark brown
+    const mute = (c) => { const v = [1, 3, 5].map(i => parseInt(c.slice(i, i + 2), 16)), g = (v[0] + v[1] + v[2]) / 3, d = [42, 30, 30]
+      return '#' + v.map((x, i) => Math.round((x * 0.75 + g * 0.25) * 0.85 + d[i] * 0.15).toString(16).padStart(2, '0')).join('') }
+    const put = (sx, sy, w, h, dx, dy) => {
+      const g = blank(w, h); paintBox(g, A.bg, w, h, sx, sy); paintBox(g, A.fg, w, h, sx, sy)
+      g.forEach((r, y) => r.forEach((c, x) => { const Y = y + dy, X = x + dx
+        if (c && Y >= 0 && Y < DH && X < DW && !CHAIR.has(bg[Y][X])) bg[Y][X] = mute(c) })) }
+    put(180, 86, 44, 46, 0, 0); put(226, 86, 42, 46, 44, 0); put(180, 86, 42, 46, 86, 0); put(180, 86, 32, 46, 128, 0) }
+  for (const [x, y, c] of PLANT) if (y - 14 >= 0) bg[y - 14][x] = c   // the plant, in the corner in front of the shelves
   // a loose white sheet floated above the side cabinet's corner: give those pixels back to the wall behind it
   for (let y = 76; y <= 81; y++) for (let x = 142; x <= 147; x++) bg[y][x] = bg[75][x];
-  // a crate of film reels on the floor between the globe and the small plant (the pane's own crate prop)
-  { const g = blank(20, 18); paintBox(g, A.props.crate, 20, 18); g.forEach((r, y) => r.forEach((c, x) => { if (c) bg[y + 108][x + 6] = c })) }
   const bub = {}; for (const k of ['ok', 'wait', 'err']) { const g = blank(32, 32); paintBox(g, A.props['b_' + k], 32, 32); bub[k] = enc(g); }
   // top: the room's coordinates in the widget code start at office y 70 (the old crop), so the wall sits at negative y
   out.desk = { bg: enc(bg), fg: enc(fg), bub, pal, boss: [422 - X, 140 - Y] };   // boss seat = scene.ts HOME.boss (211,70) x2
-  if (pal.length > ABC.length) throw new Error('desk palette ' + pal.length + ' over ' + ABC.length);
   if (bg.some(r => r.some(c => !c))) console.warn('desk: some background pixels are empty');
 }
 fs.mkdirSync(new URL('taskbar/', root), { recursive: true });

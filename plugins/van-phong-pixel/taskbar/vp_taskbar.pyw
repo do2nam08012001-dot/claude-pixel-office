@@ -61,14 +61,18 @@ root.overrideredirect(True); root.attributes('-topmost', True); root.attributes(
 cv = tk.Canvas(root, bg=KEY, highlightthickness=0, bd=0, width=W * Z, height=H * Z, cursor='hand2'); cv.pack()
 BIG, MID, LAB, FOOT = ('Consolas', -22 * Z, 'bold'), ('Consolas', -15 * Z, 'bold'), ('Segoe UI', -10 * Z), ('Segoe UI', -11 * Z, 'bold')
 
+def cells(r):
+    """a sprite row as palette indexes, -1 = transparent (characters: a string of ABC digits; the room: a list)"""
+    return r if isinstance(r, list) else [-1 if ch == '.' else ABC.index(ch) for ch in r]
+
 _img = {}
 def pix(key, rows, pal):
     if key not in _img:
         im = tk.PhotoImage(width=len(rows[0]), height=len(rows))
-        im.put(' '.join('{' + ' '.join(KEY if ch == '.' else pal[ABC.index(ch)] for ch in r) + '}' for r in rows))
+        im.put(' '.join('{' + ' '.join(KEY if i < 0 else pal[i] for i in cells(r)) + '}' for r in rows))
         for y, r in enumerate(rows):   # real transparency, so what is under shows through (KEY would punch a hole to the desktop)
-            for x, ch in enumerate(r):
-                if ch == '.': im.transparency_set(x, y, True)
+            for x, i in enumerate(cells(r)):
+                if i < 0: im.transparency_set(x, y, True)
         _img[key] = im.zoom(Z) if Z > 1 else im
     return _img[key]
 
@@ -355,9 +359,9 @@ def lit(layer, night, pulse):
     out = []
     for y, r in enumerate(rows):
         yy = y; line = []
-        for x, ch in enumerate(r):
-            if ch == '.': line.append(None); continue
-            c = pal[ABC.index(ch)]
+        for x, i in enumerate(cells(r)):
+            if i < 0: line.append(None); continue
+            c = pal[i]
             col = _rgb(c)
             if night: col = (col[0] * 0.55, col[1] * 0.58, col[2] * 0.72)
             d = ((x - LAMP[0]) ** 2 + ((yy - LAMP[1]) * 1.6) ** 2) ** 0.5
@@ -394,7 +398,7 @@ def where(s, st):
     if st not in ('run', 'idle'): return (*SEAT, 'desk', None, 0)   # idle: he still strolls
     c, n = s % CYCLE, int(s // CYCLE)
     name, spot = SPOTS[n % len(SPOTS)]
-    path = [SEAT, CORNER, DOWN, spot]
+    path = [SEAT, CORNER] if spot == CORNER else [SEAT, CORNER, DOWN, spot]
     if c < WORK: return (*SEAT, 'desk', None, 0)
     c -= WORK; total = along(path, 0)[1]; T = total / SPEED; stay = CYCLE - WORK - 2 * T
     if c < T: (x, y), _ = along(path, c * SPEED); return (x, y, 'walk', name, c * SPEED)
@@ -407,11 +411,7 @@ assert along([(0, 0), (10, 0), (10, 10)], 15)[0] == (10, 5)
 def wind(s, night):
     # a breeze: plant tips sway, now and then a leaf falls from the big plant and drifts across the floor
     sw = round(math.sin(s * 1.5))
-    R(150 + sw, 12, 2, 2, '#81C784'); R(132 - sw, 16, 2, 2, '#388E3C'); R(140 + sw, 10, 2, 2, '#388E3C'); R(8 + sw, 128, 2, 2, '#81C784')
-    c = s % 16
-    if c < 6:
-        k = c / 6
-        R(round(140 - k * 120), round(30 + k * 120 + 5 * math.sin(k * 10)), 2, 2, '#81C784' if int(s * 4) % 2 else '#388E3C')
+    R(150 + sw, 2, 2, 2, '#81C784'); R(132 - sw, 6, 2, 2, '#388E3C'); R(140 + sw, 1, 2, 2, '#388E3C'); R(8 + sw, 128, 2, 2, '#81C784')   # the big plant sits in the corner, 14 rows up
 
 def motes(s, night):
     # dust floating up slowly through the lamp light
@@ -447,17 +447,10 @@ def room(pct, st, s):
     if front: img(bx + shake, by + bob, boss(fr))
     motes(s, night)
     R(38, 104, 5, 6, '#E8E2D0'); R(38, 104, 5, 1, '#FFFFFF'); R(43, 106, 1, 2, '#E8E2D0'); R(39, 105, 3, 1, '#6D4C41')   # coffee mug on the desk
-    # on the wall: a framed film still and a clock with the real time
-    R(18, 1, 20, 12, '#4E342E'); R(19, 2, 18, 10, '#8FC7E8'); R(19, 8, 18, 4, '#5D8A4A'); R(30, 3, 3, 3, '#FFE082'); R(22, 6, 4, 2, '#FFFFFF')
-    n = datetime.now(); cx, cy = 100, 7
-    R(cx - 5, cy - 4, 11, 9, '#2A1E1E'); R(cx - 4, cy - 5, 9, 11, '#2A1E1E'); R(cx - 4, cy - 3, 9, 7, '#F3E9D2'); R(cx - 3, cy - 4, 7, 9, '#F3E9D2')
-    for ang, L, col in ((n.hour % 12 * 30 + n.minute / 2, 2.4, '#2A1E1E'), (n.minute * 6, 3.6, '#2A1E1E'), (n.second * 6, 3.6, '#E5534B')):
-        r = math.radians(ang); R(round(cx + L * math.sin(r)), round(cy - L * math.cos(r)), 1, 1, col); R(round(cx + L / 2 * math.sin(r)), round(cy - L / 2 * math.cos(r)), 1, 1, col)
-    R(cx, cy, 1, 1, '#2A1E1E')
     for i in range(2):
         k = (s / 1.6 + i / 2) % 1
         R(39 + i * 2 + round(math.sin(s * 3 + i)), 102 - k * 9, 1, 2, '#F5F5F5' if k < 0.5 else '#CFD8DC')
-    for i, (x, y) in enumerate(((14, 66), (150, 14), (26, 132))):   # sparkles: globe, plant, small plant (none on his walk)
+    for i, (x, y) in enumerate(((14, 66), (146, 4), (26, 132))):   # sparkles: globe, big plant, small plant (none on his walk)
         k = (s * 0.7 + i * 0.37) % 2.2
         if k < 0.5:
             c = '#FFFFFF' if k < 0.25 else '#FFF59D'; R(x, y - 1, 1, 3, c); R(x - 1, y, 3, 1, c)
@@ -497,7 +490,14 @@ def room(pct, st, s):
         for i in range(3):
             k = (s / 0.9 + i / 3) % 1
             R(16 + i * 5, 122 + k * 12, 2, 3, '#81D4FA')
-    if spot == 'phone' and act == 'visit' and s % 1 < 0.5: R(128, 72, 8, 5, '#9FD0FF')   # the phone screen lights up
+    ring = st == 'run' and act == 'desk' and s % 20 < 2.4                         # the phone rings now and then
+    if (spot == 'phone' and act == 'visit') or ring:
+        if s % 0.5 < 0.3: R(128, 72, 8, 5, '#9FD0FF'); R(129, 73, 6, 1, '#FFFFFF')    # its screen lights up
+        if ring:                                                                   # ring waves either side, the phone jiggles
+            for i in range(2):
+                if (s * 4 + i) % 2 < 1.2: R(124 - i * 3, 70 + i, 1, 4 - i, '#FFF59D'); R(142 + i * 3, 70 + i, 1, 4 - i, '#FFF59D')
+        else:                                                                      # on a call: a little talk bubble
+            R(140, 60, 9, 6, '#FFFFFF'); R(141, 66, 2, 1, '#FFFFFF'); R(142, 62, 1, 1, '#5D6B82'); R(144, 62, 1, 1, '#5D6B82'); R(146, 62, 1, 1, '#5D6B82')
     if worried:                                                                    # sweat drops (scene.ts sweatFx)
         d = int(s * 4) % 3
         R(bx + 28, by + 8 + d, 2, 4, '#81D4FA'); R(bx + 2, by + 10 + d, 2, 4, '#81D4FA')
