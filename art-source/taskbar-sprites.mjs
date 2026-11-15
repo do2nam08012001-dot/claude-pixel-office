@@ -65,6 +65,10 @@ for (const [who, frames] of Object.entries(A.chars)) {
   // a shorter desk (x 36..119 instead of ..143): the boss walks round its right end without passing through it.
   // Columns 96..119 of the desk (plain drawer front) go; everything right of them moves 24 px left.
   for (const r of fg) { r.splice(96, 24); r.push(...Array(24).fill(null)) }
+  // a loose white sheet floated above the side cabinet's corner: give those pixels back to the wall behind it
+  for (let y = 76; y <= 81; y++) for (let x = 142; x <= 147; x++) bg[y][x] = bg[75][x];
+  // a crate of film reels on the floor between the globe and the small plant (the pane's own crate prop)
+  { const g = blank(20, 18); paintBox(g, A.props.crate, 20, 18); g.forEach((r, y) => r.forEach((c, x) => { if (c) bg[y + 108][x + 6] = c })) }
   const bub = {}; for (const k of ['ok', 'wait', 'err']) { const g = blank(32, 32); paintBox(g, A.props['b_' + k], 32, 32); bub[k] = enc(g); }
   // top: the room's coordinates in the widget code start at office y 70 (the old crop), so the wall sits at negative y
   out.desk = { bg: enc(bg), fg: enc(fg), bub, pal, boss: [422 - X, 140 - Y] };   // boss seat = scene.ts HOME.boss (211,70) x2

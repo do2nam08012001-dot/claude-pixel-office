@@ -253,7 +253,7 @@ def load():
     """every 2 s: quit when the pane's button turned the widget off, else merge the films of every Claude session;
     a film whose session stopped writing (Claude closed or asleep) is followed on Drive every 30 s"""
     global jobs
-    if not DEMO and switched_off(): startup(False); os._exit(0)    # quit at once: pending redraws would hit a destroyed canvas
+    if not DEMO and switched_off(): os._exit(0)    # quit at once: pending redraws would hit a destroyed canvas
     now = time.time() * 1000
     best = {}                                       # slug -> (job, file updated, rclone, drive)
     files = [DEMO] if DEMO else [os.path.join(LIVE, SESS + '.json')] if SESS else [os.path.join(LIVE, n) for n in (os.listdir(LIVE) if os.path.isdir(LIVE) else []) if n.endswith('.json')]
@@ -446,10 +446,17 @@ def room(pct, st, s):
     img(0, 0, lit('fg', night, pulse))
     if front: img(bx + shake, by + bob, boss(fr))
     motes(s, night)
-    R(112, 97, 5, 6, '#E8E2D0'); R(112, 97, 5, 1, '#FFFFFF'); R(117, 99, 1, 2, '#E8E2D0'); R(113, 98, 3, 1, '#6D4C41')   # coffee mug
+    R(38, 104, 5, 6, '#E8E2D0'); R(38, 104, 5, 1, '#FFFFFF'); R(43, 106, 1, 2, '#E8E2D0'); R(39, 105, 3, 1, '#6D4C41')   # coffee mug on the desk
+    # on the wall: a framed film still and a clock with the real time
+    R(18, 1, 20, 12, '#4E342E'); R(19, 2, 18, 10, '#8FC7E8'); R(19, 8, 18, 4, '#5D8A4A'); R(30, 3, 3, 3, '#FFE082'); R(22, 6, 4, 2, '#FFFFFF')
+    n = datetime.now(); cx, cy = 100, 7
+    R(cx - 5, cy - 4, 11, 9, '#2A1E1E'); R(cx - 4, cy - 5, 9, 11, '#2A1E1E'); R(cx - 4, cy - 3, 9, 7, '#F3E9D2'); R(cx - 3, cy - 4, 7, 9, '#F3E9D2')
+    for ang, L, col in ((n.hour % 12 * 30 + n.minute / 2, 2.4, '#2A1E1E'), (n.minute * 6, 3.6, '#2A1E1E'), (n.second * 6, 3.6, '#E5534B')):
+        r = math.radians(ang); R(round(cx + L * math.sin(r)), round(cy - L * math.cos(r)), 1, 1, col); R(round(cx + L / 2 * math.sin(r)), round(cy - L / 2 * math.cos(r)), 1, 1, col)
+    R(cx, cy, 1, 1, '#2A1E1E')
     for i in range(2):
         k = (s / 1.6 + i / 2) % 1
-        R(113 + i * 2 + round(math.sin(s * 3 + i)), 95 - k * 9, 1, 2, '#F5F5F5' if k < 0.5 else '#CFD8DC')
+        R(39 + i * 2 + round(math.sin(s * 3 + i)), 102 - k * 9, 1, 2, '#F5F5F5' if k < 0.5 else '#CFD8DC')
     for i, (x, y) in enumerate(((14, 66), (150, 14), (26, 132))):   # sparkles: globe, plant, small plant (none on his walk)
         k = (s * 0.7 + i * 0.37) % 2.2
         if k < 0.5:
@@ -547,22 +554,11 @@ def open_session():
     try: os.startfile('claude://')
     except OSError: pass
 
-LNK = os.path.join(os.environ.get('APPDATA', ''), 'Microsoft', 'Windows', 'Start Menu', 'Programs', 'Startup', f'Van phong pixel widget{SUF}.lnk')
-def startup(on):
-    """keep (on) or remove the Startup shortcut that brings this widget back after a restart"""
-    if DEMO: return
-    if not on:
-        try: os.remove(LNK)
-        except OSError: pass
-        return
-    args = f'"{os.path.abspath(__file__)}"' + (f' --session {SESS}' if SESS else '')
-    ps = ("$s = (New-Object -ComObject WScript.Shell).CreateShortcut($env:VP_LNK); $s.TargetPath = $env:VP_EXE; "
-          "$s.Arguments = $env:VP_ARGS; $s.WorkingDirectory = $env:VP_DIR; $s.Save()")
-    env = {**os.environ, 'VP_LNK': LNK, 'VP_EXE': sys.executable, 'VP_ARGS': args, 'VP_DIR': HERE}
-    threading.Thread(target=lambda: subprocess.run(['powershell', '-NoProfile', '-Command', ps], env=env, capture_output=True, timeout=30, creationflags=0x08000000), daemon=True).start()
+# 0.24.1-0.24.4 put a Startup shortcut here; starting with Windows was dropped, so an old one is removed
+try: os.remove(os.path.join(os.environ.get('APPDATA', ''), 'Microsoft', 'Windows', 'Start Menu', 'Programs', 'Startup', f'Van phong pixel widget{SUF}.lnk'))
+except OSError: pass
 
 def turn_off():
-    startup(False)
     if not DEMO:
         try: os.makedirs(HOME, exist_ok=True); json.dump({'on': False}, open(SWITCH, 'w', encoding='utf-8'))
         except OSError: pass
@@ -596,4 +592,4 @@ cv.bind('<ButtonPress-1>', press); cv.bind('<B1-Motion>', move); cv.bind('<Butto
 cv.bind('<Button-3>', menu)
 
 if SELFTEST: sys.exit(1 if selftest() else 0)
-startup(True); place(); load(); draw(); root.mainloop()
+place(); load(); draw(); root.mainloop()
