@@ -126,7 +126,7 @@ def fetch(key, rclone, folder, slugs):
 held = {}                                         # slug -> {'step', 'pct'}: the % shown while that step had no real number
 DEF_EST = {'inputs': 120, 'research': 1800, 'plan': 5400, 'render': 14400, 'qa': 900, 'deliver': 300}   # timeline.ts VIDEO_STEPS
 STALE_MS = 15 * 60_000
-TIMELINE_VERSION = 1                              # = hooks/timeline.ts TIMELINE_VERSION; the case table carries it too
+TIMELINE_VERSION = 2                              # = hooks/timeline.ts TIMELINE_VERSION; the case table carries it too
 MAP = {'idle': -1, 'inputs': 0, 'research': 1, 'plan': 2, 'render': 3, 'qa': 4, 'deliver': 5, 'done': 6}
 
 def timeline(f, steps, now0, hold=None):
@@ -186,13 +186,14 @@ def timeline(f, steps, now0, hold=None):
     if cur: frac = min(0.99, max(0, progress if real else spent / max(1, spent + cur_left) if cur_left is not None else 0.9))
     guesses = sum(s.get('guess') or 0 for s in sv if s['state'] == 'wait')
     own = None if cur_left is None else cur_left + guesses
-    fin = f.get('finishAt'); overdue = 0
-    if not all_done and fin:
+    fin = f.get('finishAt'); late = 0
+    if not all_done and fin:                     # rem: what the % is split by (inside only)
         if fin > now: remaining = max((fin - now) / 1000, own or 0); known = True
         elif own is not None: remaining = own; known = True
-        else: overdue = (now - fin) / 1000
+        else: late = (now - fin) / 1000
     elif not all_done and own is not None and known: remaining = own
-    rem = None if overdue else remaining if known else None
+    rem = None if late else remaining if known else None
+    shown = 0 if all_done else (fin - now) / 1000 if fin and fin > now else None   # time left shown: Claude's alone (version 2)
     no_data = (not enc and not (render or 0) > 0) if stage == 'render' else not progress > 0.03
     out_held = None
     if not all_done and cur and rem is not None:
@@ -211,7 +212,7 @@ def timeline(f, steps, now0, hold=None):
         total = (sum(s['work'] for s in sv if s['state'] == 'done') + (cur['work'] * (min(frac, 0.1) if no_data else frac) if cur else 0)) / ww
     total = 1 if all_done else min(0.99, total)
     step = 'done' if all_done else ids[idx] if 0 <= idx < len(ids) else stage
-    return round(total * 100), (None if rem is None else round(rem)), step, out_held
+    return round(total * 100), (None if shown is None else round(shown)), step, out_held
 
 def project(j, st, now):
     """the widget's film from a Drive status, with the pane's own numbers (timeline() above)"""
@@ -221,7 +222,7 @@ def project(j, st, now):
     pct, rem, step, h = timeline(st, j.get('steps') or [], now, held.get(j.get('slug')))
     if h: held[j.get('slug')] = h
     else: held.pop(j.get('slug'), None)
-    j.update(pct=pct, step=step, finishAt=None if rem is None else now + rem * 1000, until=(st.get('claudeStop') or {}).get('until'),
+    j.update(pct=pct, step=step, finishAt=None if rem is None or not st.get('finishAt') else now + rem * 1000,   # no time until Claude writes one, as the pane until=(st.get('claudeStop') or {}).get('until'),
              state='err' if st.get('blocked') else 'wait' if st.get('approval') else 'stop' if st.get('claudeStop') else 'run')
     return j
 
@@ -299,6 +300,7 @@ def summary(now):
     until = next((j['until'] for j in jobs if j.get('until')), None)
     line = {'err': 'có lỗi', 'wait': 'chờ bạn', 'done': 'xong rồi', 'stale': 'mất tín hiệu',
             'stop': 'dừng → ' + hhmm(until) if until else 'Claude dừng'}.get(st, 'xong ' + hhmm(main.get('finishAt')))
+    if st == 'run' and any(not j.get('finishAt') for j in jobs if j.get('state', 'run') == 'run'): line = 'chờ Claude'   # no finish time until Claude gives one
     doing = (main.get('title') or main.get('slug', '')) + (f'  +{len(jobs) - 1}' if len(jobs) > 1 else '')
     if st == 'done': pct = 100
     return pct, st, line, doing

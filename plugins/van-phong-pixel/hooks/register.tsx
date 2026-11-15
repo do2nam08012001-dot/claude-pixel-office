@@ -3,7 +3,7 @@ import type { Register } from 'claude-code'
 import type { Film, Owned, Poll } from '../types'
 import { ASSETS } from './assets'
 import { officeSvg } from './scene'
-import { timeline, liveSteps, isDone, STALE_MS } from './timeline'
+import { timeline, liveSteps, isDone, STALE_MS, fairTook } from './timeline'
 import type { View } from './timeline'
 import { cardSvg, headerSvg, footerSvg } from './cards'
 import type { CardStep } from './cards'
@@ -105,7 +105,7 @@ function summary(list: Film[], now: number) {
   return list.slice(0, 8).map(f => {
     const v = view(f), cur = v.idx >= 0 && v.idx < v.steps.length ? v.steps[v.idx] : null
     const state = f.blocked ? 'LỖI' : f.approval ? 'CHỜ DUYỆT' : v.allDone ? ((f as any).delivery === 'chat' ? 'XONG (video nằm trong chat của phiên cloud)' : 'XONG') : isClaudeIdle(f, now) ? `CLAUDE ĐANG DỪNG (${stopWhy(f) || 'hết hạn mức?'})` : 'đang làm'
-    const eta = v.allDone ? '' : v.overdue ? ` · quá giờ dự kiến ${dur(v.overdue)}` : v.remaining != null ? ` · còn ~${dur(v.remaining)}` : ''
+    const eta = v.allDone ? '' : v.overdue ? ` · quá giờ dự kiến ${dur(v.overdue)}` : v.remaining != null ? ` · còn ~${dur(v.remaining)}` : ' · chờ Claude báo giờ xong'
     return `• ${f.title || f.slug} — ${state} · ${Math.round(v.total * 100)}%${cur ? ` · bước ${v.idx + 1}/${v.steps.length} ${cur.label}` : ''}${eta}${f.message ? ` · ${f.message}` : v.rnote && !v.allDone ? ` · ${v.rnote}` : ''}`
   }).join('\n')
 }
@@ -136,7 +136,7 @@ async function writeLive($: any, dir: string, list: Film[], drive = DEFAULT_DRIV
   const jobs = list.map(f => {
     const v = view(f)
     return { slug: f.slug, title: f.title || f.slug, step: f.stage ?? f.step, pct: v.allDone ? 100 : Math.round(v.total * 100),
-      finishAt: !v.allDone && v.remaining != null ? Math.round(v.at + v.remaining * 1000) : null,
+      finishAt: !v.allDone && v.remaining != null ?Math.round(v.at + v.remaining * 1000) : null,
       state: isDone(f) ? 'done' : f.blocked ? 'err' : f.approval ? 'wait' : isClaudeIdle(f, now) ? 'stop' : 'run', until: f.claudeStop?.until ?? null,
       // what the widget needs to go on by itself from the Drive status when this session stops writing (Claude closed or asleep)
       skill: f.source === 'drive' ? f.skill : undefined,
@@ -351,9 +351,8 @@ async function askEta($: any, command: string) {
   if (/drive\.sh["']?\s+mark\s+blocked\b/.test(command)) { blockedAt ||= now; return }
   const m = STAGE_MARK.exec(command)
   if (blockedAt && (m || /drive\.sh["']?\s+mark\s+resume\b/.test(command))) { const t = blockedAt; blockedAt = 0; if (now - t > RECOVER_MS) return recovered($, t, now, 'lỗi', command) }
-  if (etaGiven(command) || !m) return
-  if (/\s\d+(\.\d+)?\s*["']?\s*$/.test(m[2])) return
-  ask($, '')
+  // stage marks ask nothing: the video repo's drive.sh itself tells Claude to give the minutes at its four points
+  // (start, research_done, plan_done, render_done) and the office only reads what Claude reports
 }
 async function asks($: any, e: any) {
   if (stopAt) { const t = stopAt; stopAt = 0; recovered($, t, await clockNow($), 'lúc Claude dừng', String(e.command ?? '')) }
@@ -392,12 +391,14 @@ async function learn($: any, list: Film[]) {
     const id = `${f.slug}:${stage}`
     if (db.seen.includes(id)) continue
     const k = `${f.skill}:${stage}`, s = (h.end - h.start) / 1000 - (f.paused?.[stage] ?? 0)
-    if (s > 5) { db.d[k] = [...(db.d[k] ?? []), s].slice(-8); changed = true }
+    if (fairTook(stage, s)) { db.d[k] = [...(db.d[k] ?? []), s].slice(-8); changed = true }
     db.seen = [...db.seen, id].slice(-400)
   }
   if (changed) { try { await $.store.set(LEARN, db) } catch { /* read-only */ } }
   const med = (a: number[]) => { const b = [...a].sort((x, y) => x - y); return b[Math.floor(b.length / 2)] }
-  learned = Object.fromEntries(Object.entries(db.d).filter(([, v]) => v.length).map(([k, v]) => [k, med(v)]))
+  // filtered on read too, so a book already holding overnight samples cleans itself
+  const ok = Object.entries(db.d).map(([k, v]) => [k, v.filter(s => fairTook(k.split(':').pop()!, s))] as const)
+  learned = Object.fromEntries(ok.filter(([, v]) => v.length).map(([k, v]) => [k, med(v)]))
 }
 
 // the office drawing: shared by the side pane and the transcript row (cloud sessions place no panes)
@@ -451,12 +452,11 @@ async function drawOffice($: any, e: any) {
   const card = (f: Film) => {
     const v = view(f), kind = kindOf(f), focused = f.slug === shown?.slug
     const group = GROUP_VI[f.group ?? f.skill ?? ''] ?? f.group ?? f.skill ?? ''
-    const waitEta = f.source === 'drive' && !finish.get(f.slug) && !v.allDone
-    const etaText = v.allDone ? ((f as any).delivery === 'chat' ? 'xong · video trong chat phiên cloud' : 'đã xong') : kind === 'stale' ? 'im lặng — không ước lượng' : v.overdue ? `quá giờ dự kiến ${dur(v.overdue)} — chờ cloud báo lại` : waitEta ? 'đang chờ Claude ước giờ xong…' : v.over ? 'bước này quá dự kiến — chờ cloud báo %' : v.remaining == null ? 'chưa đủ dữ liệu để ước lượng' : `còn ~${dur(v.remaining)} · xong ~${clock(now + v.remaining * 1000)}`
+    const etaText = v.allDone ? ((f as any).delivery === 'chat' ? 'xong · video trong chat phiên cloud' : 'đã xong') : kind === 'stale' ? 'im lặng — không ước lượng' : v.overdue ? `quá giờ dự kiến ${dur(v.overdue)} — chờ cloud báo lại` : v.remaining == null ? 'chờ Claude báo giờ xong' : `còn ~${dur(v.remaining)} · xong ~${clock(now + v.remaining * 1000)}`
     const steps: CardStep[] = v.steps.map(s => ({
       label: s.label, role: s.role, state: s.state, w: s.work,
       took: s.took ? dur(s.took) + (s.est && s.took > 3 * s.est && !f.paused ? ' (gồm lúc dừng)' : '') : undefined, elapsed: s.elapsed ? dur(s.elapsed) : undefined,
-      left: now - f.updated > STALE_MS && !v.allDone ? undefined : s.state === 'now' && !v.progress && s.est && (s.elapsed ?? 0) > s.est ? `quá dự kiến ${dur((s.elapsed ?? 0) - s.est)}` : s.left != null ? `~${dur(s.left)}` : undefined, guess: s.guess != null ? dur(s.guess) : undefined,
+      left: now - f.updated > STALE_MS && !v.allDone ? undefined : s.state === 'now' && s.left != null && (typeof f.eta === 'number' || v.progress > 0.03) ? `~${dur(s.left)}` : undefined,
     }))
     const stale = kind !== 'stale' ? '' : now - f.updated > STALE_MS ? `Không cập nhật ${dur((now - f.updated) / 1000)}: có thể đã dừng.` : f.claudeStop ? `Claude dừng: ${stopWhy(f)}; việc nền vẫn chạy.` : `Claude không làm gì ${dur((now - (f.claudeAt ?? now)) / 1000)} (có thể hết hạn mức hoặc đang chờ); việc nền vẫn chạy.`
     // running: the cloud's latest note (what it is doing now) and the file it touched last
@@ -554,6 +554,7 @@ export const register: Register = on => {
     cwdSkill = /explainer/.test(cwd) ? 'jp-explainer-video' : /history-video/.test(cwd) ? 'jp-history-video' : undefined
     // a cloud session of a video repo reports Claude's work live (the PC's office reads it from Drive)
     if (cwd && cwdSkill) {
+      etaAsks = 0   // a new cloud session = a new film
       try {
         const r = await $.process.run(['sh', '-c', 'if [ "$CLAUDE_CODE_REMOTE" = true ] || [ -d /root/.ccr ]; then [ -f "$1/cloud/drive.sh" ] && echo cloud; fi', 'sh', cwd], { timeoutMs: 5000 })
         if (r.exitCode === 0 && r.stdout.trim() === 'cloud') { cloudRoot = cwd; void $.process.run(['bash', `${cwd}/cloud/drive.sh`, 'ensure'], { timeoutMs: 20000 }).catch(() => {}) }
@@ -601,7 +602,7 @@ export const register: Register = on => {
     const { Box, Text, Button } = $.ui.resolve(e)
     const f = act[0], now = Date.now(), v = view(f)
     const flag = f.blocked ? 'LỖI · ' : f.approval ? 'CHỜ DUYỆT · ' : isClaudeIdle(f, now) ? `CLAUDE DỪNG${f.claudeStop ? ': ' + stopWhy(f) : ''} · ` : ''
-    const eta = v.remaining != null ? ` · còn ~${dur(v.remaining)}` : ''
+    const eta = v.overdue ? ` · quá giờ ${dur(v.overdue)}` : v.remaining != null ? ` · còn ~${dur(v.remaining)}` : ' · chờ Claude báo giờ xong'
     const td = (f as any).todo as { current?: string } | undefined
     const doing = td?.current || f.message || ''
     const name = [...(f.title || f.slug)].slice(0, 24).join('')

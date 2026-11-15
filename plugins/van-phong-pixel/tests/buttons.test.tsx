@@ -101,7 +101,7 @@ test('/vp: overdue, waiting for Claude, render done = QA', async ($, on) => {
   await ui.press({ key: 'lam-moi' })
   const { text } = await $.command.run({ command: 'vp' })
   expect(text).toContain('Trễ')
-  expect(text).toMatch(/Trễ[^\n]*còn ~/)   // a past Claude estimate gives way to the steps' own estimate
+  expect(text).toMatch(/Trễ[^\n]*quá giờ dự kiến/)   // a past Claude finish time: overdue, no guessed time left
   expect(text).not.toMatch(/Trễ[^\n]*99%/)
   expect(text).toMatch(/Render xong[^\n]*bước 5\/6 QA/)
   await ui.unmount()
@@ -176,7 +176,7 @@ test('/vp: render at 0 % right after a stalled plan reads sensibly', async ($, o
   const pct = Number(/Tamiya[^\n]*?(\d+)%/.exec(text)?.[1])
   expect(pct).toBeGreaterThan(20)
   expect(pct).toBeLessThan(45)                       // render (the biggest step) has not moved yet
-  expect(text).toMatch(/Tamiya[^\n]*còn ~\d+ giờ/)   // hours, not the 70 min Claude guessed before the render
+  expect(text).toMatch(/Tamiya[^\n]*còn ~70 phút/)   // the time left is Claude's own, never the steps' guesses
   await ui.unmount()
 })
 
@@ -196,7 +196,7 @@ test('/vp: render with no numbers says so; the final encode shows under Render',
   const { text } = await $.command.run({ command: 'vp' })
   expect(text).toMatch(/Tamiya A[^\n]*chưa có số liệu render/)
   expect(text).not.toMatch(/Tamiya A[^\n]*Render 0%/)
-  expect(text).toMatch(/Tamiya A[^\n]*còn ~\d+ giờ/)
+  expect(text).toMatch(/Tamiya A[^\n]*chờ Claude báo giờ xong/)
   expect(text).toMatch(/Tamiya B[^\n]*bước 4\/6 Render › nén video cuối[^\n]*Nén video cuối/)
   expect(text).toMatch(/Tamiya C[^\n]*bước 4\/6 Render[^\n]*Nén video cuối lượt 2\/2 · 60%/)   // not QA yet: the encode is part of Render
   await ui.unmount()
@@ -268,6 +268,7 @@ test('cloud: back from a long error, Claude is asked for a new finish time', asy
   on('prompt.submit', (_: any, e: any) => { prompts.push(e.text); return { text: e.text } })
   const bash = async (command: string) => { await $.tool.call({ tool: 'Bash', command }); await new Promise(r => setTimeout(r, 60)) }
   await $.session.start({ cwd: '/home/user/repo-jp-history-video', surface: 'desktop', isInteractive: true })
+  await bash('bash cloud/drive.sh mark eta 120')        // Claude already gave a finish time
   await bash('bash cloud/drive.sh mark blocked "render lỗi"')
   at += 3 * 60_000
   await bash('bash cloud/drive.sh mark resume')
@@ -349,4 +350,16 @@ test('/vp: a film delivered in chat offers no download', async ($, on) => {
   const { text } = await $.command.run({ command: 'vp' })
   expect(text).toMatch(/Trong chat — XONG \(video nằm trong chat của phiên cloud\)/)
   await ui.unmount()
+})
+
+test('cloud: stage marks ask nothing (the video repo reminds Claude itself); the office reads the minutes', async ($, on) => {
+  const prompts: string[] = []
+  engine(on, [])
+  on('clock.now', () => ({ value: 1_800_000_000_000 }))
+  on('prompt.submit', (_: any, e: any) => { prompts.push(e.text); return { text: e.text } })
+  const bash = async (command: string) => { await $.tool.call({ tool: 'Bash', command }); await new Promise(r => setTimeout(r, 60)) }
+  await $.session.start({ cwd: '/home/user/repo-jp-explainer-video', surface: 'desktop', isInteractive: true })
+  for (const c of ['mark start', 'mark research_done', 'mark plan_done "" 240', 'mark render_start', 'mark render_done'])
+    await bash(`bash cloud/drive.sh ${c}`)
+  expect(prompts.length).toBe(0)
 })

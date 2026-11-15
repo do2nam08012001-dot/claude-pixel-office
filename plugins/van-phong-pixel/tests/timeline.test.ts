@@ -1,5 +1,5 @@
 import { expect, test } from 'claude-code/testing'
-import { timeline, liveSteps, TIMELINE_VERSION } from '../hooks/timeline'
+import { timeline, liveSteps, TIMELINE_VERSION, fairTook } from '../hooks/timeline'
 // the table is JSON after `export default ` (tests import code only; the widget reads it as JSON)
 import table from '../taskbar/timeline-cases.mjs'
 
@@ -31,3 +31,9 @@ for (const c of table.cases as any[]) {
     expect({ pct: o.pct, remaining: o.remaining, step: o.step, model: o.model }).toEqual({ pct: c.pct, remaining: c.remaining, step: c.step, model: c.model })
   })
 }
+
+test('a learned step time past 3x its default (an overnight stop) is not learned', () => {
+  expect(fairTook('plan', 42000)).toBe(false)   // Tamiya: plan 11 h 40 with Claude stopped overnight
+  expect(fairTook('plan', 6000)).toBe(true)
+  expect(fairTook('plan', 3)).toBe(false)
+})

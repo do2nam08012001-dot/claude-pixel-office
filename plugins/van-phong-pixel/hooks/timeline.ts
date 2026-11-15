@@ -6,14 +6,16 @@ import { legacy } from './scene'
 
 export const STALE_MS = 15 * 60_000
 /** raise it with any change to the numbers below; the case table carries the same value and the widget's port checks it */
-export const TIMELINE_VERSION = 1
+export const TIMELINE_VERSION = 2
 // Legacy video pipeline (v1 status files of the jp video repos); est = rough seconds per stage
 export const VIDEO_STEPS: Step[] = [
   { id: 'inputs', label: 'Nhận đầu vào', role: 'fetch', est: 120 }, { id: 'research', label: 'Nghiên cứu', role: 'research', est: 1800 },
   { id: 'plan', label: 'Kế hoạch', role: 'plan', est: 5400 }, { id: 'render', label: 'Render', role: 'build', est: 14400 },
   { id: 'qa', label: 'QA', role: 'check', est: 900 }, { id: 'deliver', label: 'Giao phim', role: 'deliver', est: 300 },
 ]
-const ROLES: Role[] = ['fetch', 'research', 'plan', 'build', 'check', 'deliver']
+// a learned step time worth keeping: over 3x the default it held an overnight stop (old films had no `paused`)
+export const fairTook = (stage: string, s: number) => { const e = VIDEO_STEPS.find(x => x.id === stage)?.est; return s > 5 && (!e || s <= 3 * e) }
+const ROLES: Role[] =['fetch', 'research', 'plan', 'build', 'check', 'deliver']
 
 export type StepView = Step & { state: 'done' | 'now' | 'wait'; took?: number; elapsed?: number; left?: number | null; guess?: number | null; w: number; work: number }
 export type View = { over: boolean; overdue: number; steps: StepView[]; idx: number; allDone: boolean; progress: number; frac: number; scene: any; total: number; remaining: number | null; known: boolean; rnote: string; barNow: number; at: number }
@@ -106,13 +108,17 @@ export function timeline(f: Film, now0: number, ctx: TimelineCtx = {}): View & {
   }
   const own = curLeft == null ? null : curLeft + sv.reduce((a2, s) => a2 + (s.state === 'wait' ? (s.guess ?? 0) : 0), 0)
   const fin = ctx.finish
-  let overdue = 0
+  let late = 0
+  // rem: the time left the % is split by (inside only: it may lean on the step estimates)
   if (!allDone && fin) {
     if (fin > now) { remaining = Math.max((fin - now) / 1000, own ?? 0); known = true; over = false }
     else if (own != null) { remaining = own; known = true }
-    else overdue = (now - fin) / 1000
+    else late = (now - fin) / 1000
   } else if (!allDone && own != null && known) remaining = own
-  const rem = overdue ? null : known ? remaining : null
+  const rem = late ? null : known ? remaining : null
+  // shown: the time left and finish time are Claude's alone (never a sum of guessed step lengths); none yet = none shown
+  const shown = allDone ? 0 : fin && fin > now ? (fin - now) / 1000 : null
+  const overdue = !allDone && fin && fin <= now ? (now - fin) / 1000 : 0
   let total: number, barNow = frac, held: Held | undefined   // barNow: how much of the current step's block the total bar fills
   // no real number for the current step yet (render with no frame or encode, others ≤ 3 %)
   const noData = f.stage === 'render' ? !enc && !((f.render ?? 0) > 0) : !(progress > 0.03)
@@ -139,7 +145,7 @@ export function timeline(f: Film, now0: number, ctx: TimelineCtx = {}): View & {
   }
   // the HP bar starts at the same share and fills exactly when the step should end
   scene = { ...scene, progress: frac, rate: curLeft && curLeft > 0 ? (1 - frac) / curLeft : 0 }
-  return { over, overdue, steps: sv, idx, allDone, progress, frac, barNow, scene, total: allDone ? 1 : Math.min(0.99, total), remaining: rem, known, rnote, held, at: now }
+  return { over, overdue, steps: sv, idx, allDone, progress, frac, barNow, scene, total: allDone ? 1 : Math.min(0.99, total), remaining: shown, known: shown != null, rnote, held, at: now }
 }
 
 /** the step model the plugin hands the taskbar widget, so it can go on by itself from the Drive status */
