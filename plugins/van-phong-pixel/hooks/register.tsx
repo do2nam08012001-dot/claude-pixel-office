@@ -28,7 +28,6 @@ let busy = false, again = false, cwdSkill: string | undefined, skills: string[] 
 // one random seed per session: every redraw of the office picks the same props, moods and routines
 const SEED = Math.floor(Math.random() * 2 ** 31)
 const finish = new Map<string, number>()   // slug -> finish time shown (ms)
-const capped = new Map<string, { step: string; pct: number }>()   // slug -> % shown while its step had no real number
 const paneOpen = atom({ plugin: 'van-phong-pixel', key: 'paneOpen' } as const, false)
 // learned stage durations (seconds, median of the last films) per "skill:stage"; seeds the estimates of new films
 let learned: Record<string, number> = {}
@@ -59,7 +58,8 @@ const clock = (ms: number) => { const d = new Date(ms); return `${String(d.getHo
 // the time line of each film is worked out ONCE per refresh (timeline.ts, a pure function) and read everywhere else,
 // so the card, the scene, /vp, the band and the widget show the same numbers; only that pass keeps the held %
 const views = new Map<string, { key: string; v: View }>()
-const ctxOf = (f: Film) => ({ finish: finish.get(f.slug), learned, held: capped.get(f.slug) })
+// no held %: it was this session's memory, so two sessions (and the widget) showed different % for one film (t23: 95 vs 85)
+const ctxOf = (f: Film) => ({ finish: finish.get(f.slug), learned })
 const vkey = (f: Film) => `${f.updated}:${finish.get(f.slug) ?? ''}`
 function view(f: Film): View {
   const c = views.get(f.slug)
@@ -136,9 +136,11 @@ async function writeLive($: any, dir: string, list: Film[], drive = DEFAULT_DRIV
   // the same numbers the pane shows: % of the work, finish = now + time left
   const jobs = list.map(f => {
     const v = view(f)
+    // no update for 15 min: "mất tín hiệu" and no finish time, as the card ("im lặng — không ước lượng")
+    const quiet = !isDone(f) && now - f.updated > STALE_MS
     return { slug: f.slug, title: f.title || f.slug, step: f.stage ?? f.step, pct: v.allDone ? 100 : Math.round(v.total * 100),
-      finishAt: !v.allDone && v.remaining != null ?Math.round(v.at + v.remaining * 1000) : null,
-      state: isDone(f) ? 'done' : f.blocked ? 'err' : f.approval ? 'wait' : isClaudeIdle(f, now) ? 'stop' : 'run', until: f.claudeStop?.until ?? null,
+      finishAt: !v.allDone && !quiet && v.remaining != null ? Math.round(v.at + v.remaining * 1000) : null,
+      state: isDone(f) ? 'done' : f.blocked ? 'err' : f.approval ? 'wait' : isClaudeIdle(f, now) ? 'stop' : quiet ? 'stale' : 'run', until: f.claudeStop?.until ?? null,
       // what the widget needs to go on by itself from the Drive status when this session stops writing (Claude closed or asleep)
       skill: f.source === 'drive' ? f.skill : undefined,
       doneAt: isDone(f) ? (f.history?.done?.start ?? f.updated) : null,   // the widget drops a film 10 min after this, as the pane does
@@ -247,7 +249,6 @@ async function refreshInner($: any) {
   const nowMs = Date.now()
   for (const f of list) {
     const v = timeline(f, nowMs, ctxOf(f))
-    if (v.held) capped.set(f.slug, v.held)
     views.set(f.slug, { key: vkey(f), v })
   }
   for (const f of list) {

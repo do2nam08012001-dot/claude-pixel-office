@@ -219,7 +219,7 @@ def project(j, st, now):
     j = dict(j)
     if st.get('done') or st.get('stage') == 'done':
         j.update(state='done', pct=100, finishAt=None, doneAt=((st.get('history') or {}).get('done') or {}).get('start') or st.get('updated')); return j
-    pct, rem, step, h = timeline(st, j.get('steps') or [], now, held.get(j.get('slug')))
+    pct, rem, step, h = timeline(st, j.get('steps') or [], now, None)   # no held %: the pane keeps none either (same % everywhere)
     if h: held[j.get('slug')] = h
     else: held.pop(j.get('slug'), None)
     j.update(pct=pct, step=step, finishAt=None if rem is None or not st.get('finishAt') else now + rem * 1000,   # no time until Claude writes one, as the pane until=(st.get('claudeStop') or {}).get('until'),
@@ -279,7 +279,7 @@ def load():
                 st = drive_st[slug]; j = project(j, st, now)
                 fresh = max(st.get('beat') or 0, st.get('updated') or 0) or drive_at[slug]   # the cloud's own heartbeat
         if j.get('state') == 'done' and now - (j.get('doneAt') or u) > 10 * 60_000: continue   # done 10 min ago (by the film's own time)
-        if j.get('state', 'run') == 'run' and now - fresh > 5 * 60_000: j = {**j, 'state': 'stale'}   # this film has gone quiet
+        if j.get('state', 'run') == 'run' and now - fresh > STALE_MS: j = {**j, 'state': 'stale'}   # this film has gone quiet
         got.append(j)
     for (rclone, folder), slugs in want.items():
         if (rclone, folder) not in fetching and now - tried.get((rclone, folder), 0) > DRIVE_EVERY:   # also when a read failed

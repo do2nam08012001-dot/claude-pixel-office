@@ -236,6 +236,10 @@ test('Windows: the widget button turns the taskbar widget on (writes the switch,
   const live = [...files.entries()].find(([k]) => k.includes('/.claude/van-phong/live/'))
   expect(live && JSON.parse(live[1]).jobs[0].slug).toBe('sony')
   expect(JSON.parse(live![1]).jobs[0].steps[0].est).toBe(120)   // est for the widget's own reading (after learned)
+  // sony has had no update for 3 h (as t23 for 34 min): "mất tín hiệu", no finish time, as the card (t23 read "run · 20:02")
+  const quiet = JSON.parse(live![1]).jobs[0]
+  expect(quiet.state).toBe('stale')
+  expect(quiet.finishAt).toBe(null)
   await ui.press({ key: 'widget' })
   expect(JSON.parse(files.get(sw)!).on).toBe(false)
   await ui.unmount()
