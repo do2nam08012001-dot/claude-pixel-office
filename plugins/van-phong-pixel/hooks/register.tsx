@@ -136,10 +136,10 @@ async function writeLive($: any, dir: string, list: Film[], drive = DEFAULT_DRIV
   // the same numbers the pane shows: % of the work, finish = now + time left
   const jobs = list.map(f => {
     const v = view(f)
-    // no update for 15 min: "mất tín hiệu" and no finish time, as the card ("im lặng — không ước lượng")
+    // no update for 15 min: "mất tín hiệu"; the finish time is always Claude's last one (past or not), as the card
     const quiet = !isDone(f) && now - f.updated > STALE_MS
     return { slug: f.slug, title: f.title || f.slug, step: f.stage ?? f.step, pct: v.allDone ? 100 : Math.round(v.total * 100),
-      finishAt: !v.allDone && !quiet && v.remaining != null ? Math.round(v.at + v.remaining * 1000) : null,
+      finishAt: v.allDone ? null : finish.get(f.slug) ?? null,
       state: isDone(f) ? 'done' : f.blocked ? 'err' : f.approval ? 'wait' : isClaudeIdle(f, now) ? 'stop' : quiet ? 'stale' : 'run', until: f.claudeStop?.until ?? null,
       // what the widget needs to go on by itself from the Drive status when this session stops writing (Claude closed or asleep)
       skill: f.source === 'drive' ? f.skill : undefined,
@@ -454,7 +454,8 @@ async function drawOffice($: any, e: any) {
   const card = (f: Film) => {
     const v = view(f), kind = kindOf(f), focused = f.slug === shown?.slug
     const group = GROUP_VI[f.group ?? f.skill ?? ''] ?? f.group ?? f.skill ?? ''
-    const etaText = v.allDone ? ((f as any).delivery === 'chat' ? 'xong · video trong chat phiên cloud' : 'đã xong') : kind === 'stale' ? 'im lặng — không ước lượng' : v.overdue ? `quá giờ dự kiến ${dur(v.overdue)} — chờ cloud báo lại` : v.remaining == null ? 'chờ Claude báo giờ xong' : `còn ~${dur(v.remaining)} · xong ~${clock(now + v.remaining * 1000)}`
+    const fin = finish.get(f.slug)   // Claude's last finish time: always shown, even past or with the film quiet
+    const etaText = v.allDone ? ((f as any).delivery === 'chat' ? 'xong · video trong chat phiên cloud' : 'đã xong') : kind === 'stale' ? (fin ? `mất tín hiệu · Claude báo xong ~${clock(fin)}` : 'mất tín hiệu · Claude chưa báo giờ xong') : v.overdue && fin ? `quá giờ dự kiến ${dur(v.overdue)} · Claude báo xong ~${clock(fin)}` : v.remaining == null ? 'chờ Claude báo giờ xong' : `còn ~${dur(v.remaining)} · xong ~${clock(now + v.remaining * 1000)}`
     const steps: CardStep[] = v.steps.map(s => ({
       label: s.label, role: s.role, state: s.state, w: s.work,
       took: s.took ? dur(s.took) + (s.est && s.took > 3 * s.est && !f.paused ? ' (gồm lúc dừng)' : '') : undefined, elapsed: s.elapsed ? dur(s.elapsed) : undefined,

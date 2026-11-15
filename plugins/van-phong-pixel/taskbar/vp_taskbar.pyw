@@ -222,7 +222,7 @@ def project(j, st, now):
     pct, rem, step, h = timeline(st, j.get('steps') or [], now, None)   # no held %: the pane keeps none either (same % everywhere)
     if h: held[j.get('slug')] = h
     else: held.pop(j.get('slug'), None)
-    j.update(pct=pct, step=step, finishAt=None if rem is None or not st.get('finishAt') else now + rem * 1000,   # no time until Claude writes one, as the pane until=(st.get('claudeStop') or {}).get('until'),
+    j.update(pct=pct, step=step, finishAt=st.get('finishAt'),   # Claude's own finish time as it is (past or not), as the pane until=(st.get('claudeStop') or {}).get('until'),
              state='err' if st.get('blocked') else 'wait' if st.get('approval') else 'stop' if st.get('claudeStop') else 'run')
     return j
 
@@ -291,17 +291,21 @@ def load():
 
 def summary(now):
     """One progress and one finish time for everything running: the film that ends last sets the time."""
-    if not jobs: return None, 'idle', 'nghỉ', 'Chưa có phim nào chạy'
+    if not jobs: return None, 'idle', ('Trạng thái', 'nghỉ', '#FFFFFF'), 'Chưa có phim nào chạy'
     main = max(jobs, key=lambda j: j.get('finishAt') or 0)
     pcts = [j['pct'] for j in jobs if j.get('pct') is not None]
     pct = round(sum(pcts) / len(pcts)) if pcts else None
     states = [j.get('state', 'run') for j in jobs]
     st = next((s for s in ('err', 'wait', 'stop', 'stale') if s in states), 'done' if all(s == 'done' for s in states) else 'run')
     until = next((j['until'] for j in jobs if j.get('until')), None)
-    line = {'err': 'có lỗi', 'wait': 'chờ bạn', 'done': 'xong rồi', 'stale': 'mất tín hiệu',
-            'stop': 'dừng → ' + hhmm(until) if until else 'Claude dừng'}.get(st, 'xong ' + hhmm(main.get('finishAt')))
-    if st == 'run' and any(not j.get('finishAt') for j in jobs if j.get('state', 'run') == 'run'): line = 'chờ Claude'   # no finish time until Claude gives one
-    elif st == 'run' and (main.get('finishAt') or 0) < now: line = 'quá giờ'   # never a finish time already past (t23 read 20:02 at 20:16)
+    # line = (label, value, colour). The finish time is always Claude's last one: past = "Quá giờ", quiet = "Mất tín hiệu";
+    # "chờ Claude" only while Claude has never given one
+    fin = main.get('finishAt')
+    line = {'err': 'có lỗi', 'wait': 'chờ bạn', 'done': 'xong rồi',
+            'stop': 'dừng → ' + hhmm(until) if until else 'Claude dừng'}.get(st)
+    line = ('Trạng thái', line, '#FFFFFF') if line else \
+        ('Mất tín hiệu', hhmm(fin), '#B0B8C8') if fin and st == 'stale' else ('Trạng thái', 'mất tín hiệu', '#B0B8C8') if st == 'stale' else \
+        ('Trạng thái', 'chờ Claude', '#FFFFFF') if not fin else ('Quá giờ', hhmm(fin), '#F2B84B') if fin < now else ('Xong lúc', hhmm(fin), '#FFFFFF')
     doing = (main.get('title') or main.get('slug', '')) + (f'  +{len(jobs) - 1}' if len(jobs) > 1 else '')
     if st == 'done': pct = 100
     return pct, st, line, doing
@@ -322,10 +326,10 @@ def panel(pct, st, line, s):
     R(0, 0, RW, HD - 1, '#1B2130'); R(0, 0, RW, 1, '#2C3548')
     R(6, 7, 6, 6, LED[st] if st != 'run' or s % 1.6 < 1.2 else '#2C3548')        # LED blinks while working
     text(16, 11, f'{pct}%' if pct is not None else '—', BIG, '#7CF08A' if st in ('run', 'done') else LED[st])
-    lab, val = (line.split(' ', 1) + [''])[:2] if line.startswith('xong ') else ('', line)
-    if st == 'done': lab, val = 'Hoàn thành', 'XONG ✓'
-    text(RW - 6, 5, 'Xong lúc' if lab == 'xong' else lab or 'Trạng thái', LAB, '#8E9AB3', 'e')
-    text(RW - 6, 19, val, MID, '#7CF08A' if st == 'done' else '#FFFFFF', 'e')
+    lab, val, col = line
+    if st == 'done': lab, val, col = 'Hoàn thành', 'XONG ✓', '#7CF08A'
+    text(RW - 6, 5, lab, LAB, '#8E9AB3', 'e')
+    text(RW - 6, 19, val, MID, col, 'e')
     # HP-bar style progress: dark track, fill with a light top line, tick every 10 %
     R(5, 28, RW - 10, 6, '#0E121B')
     if pct:
