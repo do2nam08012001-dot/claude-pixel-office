@@ -109,8 +109,9 @@ function summary(list: Film[], now: number) {
     return `• ${f.title || f.slug} — ${state} · ${Math.round(v.total * 100)}%${cur ? ` · bước ${v.idx + 1}/${v.steps.length} ${cur.label}` : ''}${eta}${f.message ? ` · ${f.message}` : v.rnote && !v.allDone ? ` · ${v.rnote}` : ''}`
   }).join('\n')
 }
-// Claude itself idle (usage limit, waiting) while background work still beats; a render runs on its own, so it does not count there
-const isClaudeIdle = (f: Film, now: number) => f.source === 'drive' && (!!f.claudeStop || (!!f.claudeAt && now - f.claudeAt > STALE_MS && f.stage !== 'render'))
+// Claude stopped = only what the cloud REPORTED (usage limit, error: drive.sh stop). A quiet Claude while the cloud still
+// beats is Claude waiting on its own long job (background run, subagent), not a stop; no beat at all shows as "không cập nhật"
+const isClaudeIdle = (f: Film, _now: number) => f.source === 'drive' && !!f.claudeStop
 const stopWhy = (f: Film) => !f.claudeStop ? '' : f.claudeStop.reason === 'rate_limit' ? `hết hạn mức${f.claudeStop.until ? ' · mở lại lúc ' + clock(f.claudeStop.until) : ''}` : `lỗi ${f.claudeStop.reason}`
 
 // ---- taskbar widget (Windows only): taskbar/vp_taskbar.pyw draws the boss room above the taskbar with one % and one
