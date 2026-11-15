@@ -301,6 +301,7 @@ def summary(now):
     line = {'err': 'có lỗi', 'wait': 'chờ bạn', 'done': 'xong rồi', 'stale': 'mất tín hiệu',
             'stop': 'dừng → ' + hhmm(until) if until else 'Claude dừng'}.get(st, 'xong ' + hhmm(main.get('finishAt')))
     if st == 'run' and any(not j.get('finishAt') for j in jobs if j.get('state', 'run') == 'run'): line = 'chờ Claude'   # no finish time until Claude gives one
+    elif st == 'run' and (main.get('finishAt') or 0) < now: line = 'quá giờ'   # never a finish time already past (t23 read 20:02 at 20:16)
     doing = (main.get('title') or main.get('slug', '')) + (f'  +{len(jobs) - 1}' if len(jobs) > 1 else '')
     if st == 'done': pct = 100
     return pct, st, line, doing
