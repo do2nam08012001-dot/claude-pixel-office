@@ -557,7 +557,7 @@ def draw():
         TAG[0] = 'room'; cv.delete('room'); room(pct, st, s)
         if root.state() == 'withdrawn': root.deiconify(); root.lift()
         # a borderless-fullscreen game (or any window) that grabs the top: take it back every 2 s, without the focus
-        if s % 2 < 0.06: root.attributes('-topmost', False); root.attributes('-topmost', True)
+        if s % 2 < 0.06 and s > menu_open[0]: root.attributes('-topmost', False); root.attributes('-topmost', True)
     root.after(1000 if root.state() == 'withdrawn' else 50, draw)
 
 def place():
@@ -604,7 +604,15 @@ def menu(ev):
     for name in SIZES: sz.add_radiobutton(label=name, value=name, variable=cur, command=lambda n=name: resize(n))
     m.add_cascade(label='Cỡ', menu=sz)
     m.add_separator(); m.add_command(label='Tắt widget', command=turn_off)
-    m.tk_popup(ev.x_root, ev.y_root)
+    # the 2-s "take the top back" would jump over this menu: hold it while the menu may be open (Windows does not tell
+    # when a native menu is dismissed by a click elsewhere, so it is time-boxed; picking an item ends it at once)
+    menu_open[0] = time.time() + 15
+    for i in range(m.index('end') + 1):
+        if m.type(i) == 'command':
+            cmd = m.entrycget(i, 'command'); m.entryconfigure(i, command=lambda c=cmd: (menu_open.__setitem__(0, 0), root.tk.call(c)))
+    try: m.tk_popup(ev.x_root, ev.y_root)
+    finally: m.grab_release()
+menu_open = [0]
 
 drag = {}
 def press(ev): drag.update(x=ev.x_root, y=ev.y_root, wx=root.winfo_x(), wy=root.winfo_y(), moved=False)
