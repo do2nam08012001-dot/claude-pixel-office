@@ -556,6 +556,8 @@ def draw():
             last[0] = key; TAG[0] = 'ui'; cv.delete('all'); frame(st); panel(pct, st, line, s); footer(doing)
         TAG[0] = 'room'; cv.delete('room'); room(pct, st, s)
         if root.state() == 'withdrawn': root.deiconify(); root.lift()
+        # a borderless-fullscreen game (or any window) that grabs the top: take it back every 2 s, without the focus
+        if s % 2 < 0.06: root.attributes('-topmost', False); root.attributes('-topmost', True)
     root.after(1000 if root.state() == 'withdrawn' else 50, draw)
 
 def place():
