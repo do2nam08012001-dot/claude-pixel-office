@@ -121,7 +121,10 @@ const stopWhy = (f: Film) => !f.claudeStop ? '' : f.claudeStop.reason === 'rate_
 // pane button and the widget's own "Tắt" both write it); each session writes its films to live/<session>.json while on.
 // 0.23 had one widget per session (widget-<session>.json): a switch of those left on turns the shared one on.
 const isWin = (h: string) => /^[A-Za-z]:[\\/]/.test(h)
-const sessKey = () => (ownKey || 'session').replace(/[^A-Za-z0-9_-]/g, '_')
+// the live file is per SESSION id: several sessions in one folder (t21…t25 all in the explainer repo) shared one file by
+// cwd, and a session with no film overwrote the film of the one that had it (the widget read "nghỉ" while t25 ran)
+let liveId = ''
+const sessKey = () => (liveId ? `s_${liveId}` : ownKey || 'session').replace(/[^A-Za-z0-9_-]/g, '_')
 async function widgetSaysOn($: any, dir: string): Promise<boolean> {
   try { return JSON.parse(await $.fs.read(`${dir}/widget.json`)).on === true } catch { return false }
 }
@@ -539,6 +542,7 @@ export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     const cwd = String((e as any).cwd ?? '')
     ownKey = `owned:${String((e as any).session_id ?? (e as any).sessionId ?? cwd)}`
+    try { liveId = String(await $.session.id()) } catch { /* older engine: per folder as before */ }
     try {
       const saved = (await $.store.get(ownKey)) as Owned[] | undefined
       if (saved?.length) await update($, owned, (o: Owned[]) => [...(o ?? []), ...saved.filter(s => !(o ?? []).some(x => x.slug === s.slug))]); void keep($)
