@@ -6,7 +6,7 @@ import { legacy } from './scene'
 
 export const STALE_MS = 15 * 60_000
 /** raise it with any change to the numbers below; the case table carries the same value and the widget's port checks it */
-export const TIMELINE_VERSION = 2
+export const TIMELINE_VERSION = 3
 // Legacy video pipeline (v1 status files of the jp video repos); est = rough seconds per stage
 export const VIDEO_STEPS: Step[] = [
   { id: 'inputs', label: 'Nhận đầu vào', role: 'fetch', est: 120 }, { id: 'research', label: 'Nghiên cứu', role: 'research', est: 1800 },
@@ -115,28 +115,27 @@ export function timeline(f: Film, now0: number, ctx: TimelineCtx = {}): View & {
     else if (own != null) { remaining = own; known = true }
     else late = (now - fin) / 1000
   } else if (!allDone && own != null && known) remaining = own
-  const rem = late ? null : known ? remaining : null
   // shown: the time left and finish time are Claude's alone (never a sum of guessed step lengths); none yet = none shown
   const shown = allDone ? 0 : fin && fin > now ? (fin - now) / 1000 : null
   const overdue = !allDone && fin && fin <= now ? (now - fin) / 1000 : 0
   let total: number, barNow = frac, held: Held | undefined   // barNow: how much of the current step's block the total bar fills
   // no real number for the current step yet (render with no frame or encode, others ≤ 3 %)
   const noData = f.stage === 'render' ? !enc && !((f.render ?? 0) > 0) : !(progress > 0.03)
-  // a step past its own estimate (own = null) still has Claude's time left: the % stays time-based, not 90 % of the work
-  if (!allDone && cur && rem != null) {
-    // % = time worked ÷ (time worked + the time left shown), so the % and "còn … · xong …" always agree; a step that
-    // ran far past its estimate with no recorded stop counts its estimate (the card marks it "gồm lúc dừng")
+  // Claude gave a finish time: % = time worked ÷ (time worked + Claude's time left), with the real time of every step
+  // (stops left out). It runs evenly to ~99 % at Claude's finish time and agrees with "còn … · xong …"; it moves
+  // only when Claude gives a new time (the cloud reminds Claude to every ≤ 10 min, and as soon as it is overdue).
+  // Version 3: no cap for a step with no number (t25: QA 5 h with no number read 20 % with 2 min left, then 100 %).
+  if (!allDone && cur && (shown != null || overdue)) {
+    const left = shown ?? 0   // overdue: nothing left by Claude's time, the % waits at 99 % for Claude's new one
     const guesses = sv.reduce((a, s) => a + (s.state === 'wait' ? (s.guess ?? 0) : 0), 0)
-    sv.forEach((s, i) => { s.work = s.state === 'done' ? (tooks[i] != null && !(s.est && tooks[i]! > 3 * s.est && !f.paused) ? tooks[i]! : s.est ?? avg ?? 60) : s.state === 'wait' ? (s.guess ?? 0) : 0 })
-    cur.work = Math.max(1, spentCur + Math.max(0, rem - guesses))
+    // a step over 3x its usual length with no recorded stop held an unrecorded stop (Tamiya: 11 h plan): it counts 3x
+    const fair = (t: number, est?: number) => (est && t > 3 * est && !f.paused ? 3 * est : t)
+    sv.forEach((s, i) => { s.work = s.state === 'done' ? fair(tooks[i] ?? 0, s.est) : s.state === 'wait' ? (s.guess ?? 0) : 0 })
+    const spent = fair(spentCur, cur.est)
+    cur.work = Math.max(1, spent + Math.max(0, left - guesses))
     const doneW = sv.reduce((a, s) => a + (s.state === 'done' ? s.work : 0), 0)
-    // no real number: only up to 10 % of the step's estimate counts, so the % does not climb with the clock while
-    // Claude's fixed finish time is all there is
-    const counted = noData ? Math.min(spentCur, 0.1 * (cur.est ?? spentCur)) : spentCur
-    total = (doneW + counted) / Math.max(1, doneW + spentCur + rem)
-    if (noData) held = { step: cur.id, pct: total }
-    else if (ctx.held && ctx.held.step === cur.id) { total = Math.max(total, ctx.held.pct); held = ctx.held }
-    barNow = Math.min(1, (total * Math.max(1, doneW + spentCur + rem) - doneW) / cur.work)   // the bar's blocks add up to the %
+    total = (doneW + spent) / Math.max(1, doneW + spent + left)
+    barNow = Math.min(1, (total * Math.max(1, doneW + spent + left) - doneW) / cur.work)   // the bar's blocks add up to the %
   } else {
     // no honest time left: share of the WORK (each step's usual length)
     for (const s of sv) s.work = s.est ?? avg ?? 60

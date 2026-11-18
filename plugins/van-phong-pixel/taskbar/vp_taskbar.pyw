@@ -136,7 +136,7 @@ def fetch(key, rclone, folder, slugs):
 held = {}                                         # slug -> {'step', 'pct'}: the % shown while that step had no real number
 DEF_EST = {'inputs': 120, 'research': 1800, 'plan': 5400, 'render': 14400, 'qa': 900, 'deliver': 300}   # timeline.ts VIDEO_STEPS
 STALE_MS = 15 * 60_000
-TIMELINE_VERSION = 2                              # = hooks/timeline.ts TIMELINE_VERSION; the case table carries it too
+TIMELINE_VERSION = 3                              # = hooks/timeline.ts TIMELINE_VERSION; the case table carries it too
 MAP = {'idle': -1, 'inputs': 0, 'research': 1, 'plan': 2, 'render': 3, 'qa': 4, 'deliver': 5, 'done': 6}
 
 def timeline(f, steps, now0, hold=None):
@@ -206,16 +206,16 @@ def timeline(f, steps, now0, hold=None):
     shown = 0 if all_done else (fin - now) / 1000 if fin and fin > now else None   # time left shown: Claude's alone (version 2)
     no_data = (not enc and not (render or 0) > 0) if stage == 'render' else not progress > 0.03
     out_held = None
-    if not all_done and cur and rem is not None:
+    overdue = not all_done and fin and fin <= now
+    if not all_done and cur and (shown is not None or overdue):   # version 3: time worked / (worked + Claude's time left)
+        left = shown or 0
+        fair = lambda t, est: 3 * est if est and t > 3 * est and not pz else t   # an unrecorded stop counts 3x the step
         for i, s in enumerate(sv):
-            s['work'] = (tooks[i] if tooks[i] is not None and not (s['est'] and tooks[i] > 3 * s['est'] and not pz) else s['est'] or avg or 60) \
-                if s['state'] == 'done' else (s.get('guess') or 0) if s['state'] == 'wait' else 0
-        cur['work'] = max(1, spent + max(0, rem - guesses))
+            s['work'] = fair(tooks[i] or 0, s['est']) if s['state'] == 'done' else (s.get('guess') or 0) if s['state'] == 'wait' else 0
+        sp = fair(spent, cur['est'])
+        cur['work'] = max(1, sp + max(0, left - guesses))
         done_w = sum(s['work'] for s in sv if s['state'] == 'done')
-        counted = min(spent, 0.1 * (cur['est'] or spent)) if no_data else spent
-        total = (done_w + counted) / max(1, done_w + spent + rem)
-        if no_data: out_held = {'step': cur['id'], 'pct': total}
-        elif hold and hold.get('step') == cur['id']: total = max(total, hold['pct']); out_held = hold
+        total = (done_w + sp) / max(1, done_w + sp + left)
     else:
         for s in sv: s['work'] = s['est'] or avg or 60
         ww = sum(s['work'] for s in sv) or 1

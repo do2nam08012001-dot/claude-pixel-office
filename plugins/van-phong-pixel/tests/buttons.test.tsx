@@ -102,7 +102,7 @@ test('/vp: overdue, waiting for Claude, render done = QA', async ($, on) => {
   const { text } = await $.command.run({ command: 'vp' })
   expect(text).toContain('Trễ')
   expect(text).toMatch(/Trễ[^\n]*quá giờ dự kiến/)   // a past Claude finish time: overdue, no guessed time left
-  expect(text).not.toMatch(/Trễ[^\n]*99%/)
+  expect(text).toMatch(/Trễ[^\n]*99%/)   // v3: past Claude's finish time the % waits at 99 % for Claude's new time
   expect(text).toMatch(/Render xong[^\n]*bước 5\/6 QA/)
   await ui.unmount()
 })
@@ -148,9 +148,8 @@ test('/vp: a reported stop says why and until when', async ($, on) => {
   await ui.unmount()
 })
 
-// % is the share of the work: a planning step that ran 11 h with render still to come is far from done,
-// and a new ETA from Claude does not move the %
-test('/vp: % counts work, not hours spent', async ($, on) => {
+// v3: % = time worked / (worked + Claude's time left); an 11 h plan with no recorded stop counts 3x its usual length
+test('/vp: % follows the time toward Claude finish, a stalled step counted at 3x', async ($, on) => {
   const t = Date.now()
   const f = { slug: 'long', skill: 'jp-explainer-video', title: 'Kế hoạch dài', stage: 'plan', finishAt: t + 10_000_000, updated: t, history: { inputs: { start: t - 41_000_000, end: t - 40_900_000 }, research: { start: t - 40_900_000, end: t - 39_600_000 }, plan: { start: t - 39_600_000 } } }
   engine(on, [], JSON.stringify(f))
@@ -160,7 +159,8 @@ test('/vp: % counts work, not hours spent', async ($, on) => {
   await ui.press({ key: 'lam-moi' })
   const { text } = await $.command.run({ command: 'vp' })
   const pct = Number(/Kế hoạch dài[^\n]*?(\d+)%/.exec(text)?.[1])
-  expect(pct).toBeLessThan(50)
+  expect(pct).toBeGreaterThan(50)
+  expect(pct).toBeLessThan(75)
   await ui.unmount()
 })
 
@@ -176,8 +176,8 @@ test('/vp: render at 0 % right after a stalled plan reads sensibly', async ($, o
   await ui.press({ key: 'lam-moi' })
   const { text } = await $.command.run({ command: 'vp' })
   const pct = Number(/Tamiya[^\n]*?(\d+)%/.exec(text)?.[1])
-  expect(pct).toBeGreaterThan(20)
-  expect(pct).toBeLessThan(45)                       // render (the biggest step) has not moved yet
+  expect(pct).toBeGreaterThan(70)                    // v3: time-based toward Claude's 70 min left (the stalled plan counts 3x)
+  expect(pct).toBeLessThan(95)
   expect(text).toMatch(/Tamiya[^\n]*còn ~70 phút/)   // the time left is Claude's own, never the steps' guesses
   await ui.unmount()
 })
@@ -304,9 +304,9 @@ test('/vp: "Claude đang sửa" is a running film, not an error', async ($, on) 
   await ui.unmount()
 })
 
-// Onkyo 2: render 102 min with no frame yet (fixing layout / cut gates), Claude's finish time fixed: the % does not climb
-// with the clock. Film B is film A ten minutes later (everything shifted by 10 min), so both must read the same %.
-test('/vp: no real number in the current step - the % holds still', async ($, on) => {
+// t25 / v3: with Claude's finish time fixed the % climbs evenly with the clock toward it (no cap that held it at 20 %
+// and then jumped to 100 %). Film B is film A ten minutes earlier: a little lower.
+test('/vp: the % climbs evenly toward Claude finish time', async ($, on) => {
   const t = Date.now(), fin = t + 140 * 60_000
   const mk = (slug: string, title: string, late: number) => {
     const H = (s: number) => t - late - s * 1000
@@ -321,8 +321,8 @@ test('/vp: no real number in the current step - the % holds still', async ($, on
   const { text } = await $.command.run({ command: 'vp' })
   const pa = Number(/Onkyo A[^\n]*?(\d+)%/.exec(text)?.[1]), pb = Number(/Onkyo B[^\n]*?(\d+)%/.exec(text)?.[1])
   expect(pa).toBeGreaterThan(0)
-  expect(pb).toBe(pa)
-  expect(pa).toBeLessThan(39)                          // it read 39 % and climbing
+  expect(pa).toBeGreaterThan(pb)
+  expect(pa - pb).toBeLessThan(10)
   await ui.unmount()
 })
 
@@ -338,8 +338,8 @@ test('/vp: a step past its estimate with no real number - the % stays low', asyn
   await ui.press({ key: 'lam-moi' })
   const { text } = await $.command.run({ command: 'vp' })
   const pc = Number(/Onkyo C[^\n]*?(\d+)%/.exec(text)?.[1])
-  expect(pc).toBeGreaterThan(0)
-  expect(pc).toBeLessThan(25)
+  expect(pc).toBeGreaterThan(35)   // v3: 2 h worked of 2 h + Claude's 3 h left: ~46 %, never the 88 % of the old work share
+  expect(pc).toBeLessThan(55)
   await ui.unmount()
 })
 
